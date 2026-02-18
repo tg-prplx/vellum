@@ -177,8 +177,10 @@ export const api = {
 
   chatFork: (chatId: string, parentMessageId: string, name: string) =>
     post<BranchNode>(`/chats/${chatId}/fork`, { parentMessageId, name }),
-  chatEditMessage: (messageId: string, content: string) => patchReq<void>(`/messages/${messageId}`, { content }),
-  chatDeleteMessage: (messageId: string) => del<void>(`/messages/${messageId}`),
+  chatEditMessage: (messageId: string, content: string) =>
+    patchReq<{ ok: boolean; timeline: ChatMessage[] }>(`/messages/${messageId}`, { content }),
+  chatDeleteMessage: (messageId: string) =>
+    del<{ ok: boolean; timeline: ChatMessage[] }>(`/messages/${messageId}`),
   chatTranslateMessage: (messageId: string, targetLanguage?: string) =>
     post<{ translation: string }>(`/chats/messages/${messageId}/translate`, { targetLanguage }),
   chatSaveSampler: (chatId: string, samplerConfig: SamplerConfig) =>

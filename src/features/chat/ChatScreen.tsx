@@ -421,15 +421,15 @@ export function ChatScreen() {
   }
 
   async function handleDelete(messageId: string) {
-    await api.chatDeleteMessage(messageId);
-    await refreshActiveTimeline();
+    const result = await api.chatDeleteMessage(messageId);
+    setMessages(result.timeline);
   }
 
   async function saveEdit(messageId: string) {
-    await api.chatEditMessage(messageId, editingValue);
+    const result = await api.chatEditMessage(messageId, editingValue);
     setEditingId(null);
     setEditingValue("");
-    await refreshActiveTimeline();
+    setMessages(result.timeline);
   }
 
   async function applyPreset(preset: string) {
