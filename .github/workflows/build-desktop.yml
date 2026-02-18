@@ -5,14 +5,25 @@ on:
   push:
     tags:
       - "v*"
+  release:
+    types:
+      - published
 
 permissions:
   contents: write
 
 jobs:
   macos:
-    name: macOS (arm64 + x64)
-    runs-on: macos-14
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -41,13 +52,12 @@ jobs:
         run: |
           npm run build:desktop
           npm run rebuild:native:electron
-          npx electron-builder --mac --arm64 --publish never
-          npx electron-builder --mac --x64 --publish never
+          npx electron-builder --mac --${{ matrix.arch }} --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: macos-${{ matrix.arch }}
           path: release/**/*
           if-no-files-found: error
 
@@ -97,7 +107,7 @@ jobs:
     needs:
       - macos
       - windows
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref_name, 'v')
 
     steps:
       - name: Download all artifacts
