@@ -1,5 +1,5 @@
 {
-  "name": "vellum",
+  "name": "vellium",
   "private": true,
   "version": "0.2.0",
   "type": "module",
@@ -56,8 +56,8 @@
     "wait-on": "^9.0.4"
   },
   "build": {
-    "appId": "com.vellum.app",
-    "productName": "Vellum",
+    "appId": "com.vellium.app",
+    "productName": "Vellium",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -70,7 +70,6 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "server-bundle.mjs",
       "node_modules/better-sqlite3/build/Release/*.node",
       "node_modules/bindings/**",
       "node_modules/file-uri-to-path/**"
