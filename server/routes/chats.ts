@@ -599,6 +599,52 @@ router.patch("/:id/characters", (req, res) => {
   res.json({ ok: true, characterIds });
 });
 
+router.get("/:id/branches", (req, res) => {
+  const chatId = req.params.id;
+  const rows = db.prepare(
+    "SELECT id, chat_id, name, parent_message_id, created_at FROM branches WHERE chat_id = ? ORDER BY created_at ASC"
+  ).all(chatId) as {
+    id: string;
+    chat_id: string;
+    name: string;
+    parent_message_id: string | null;
+    created_at: string;
+  }[];
+
+  if (rows.length === 0) {
+    const id = resolveBranch(chatId);
+    const fallback = db.prepare(
+      "SELECT id, chat_id, name, parent_message_id, created_at FROM branches WHERE id = ?"
+    ).get(id) as {
+      id: string;
+      chat_id: string;
+      name: string;
+      parent_message_id: string | null;
+      created_at: string;
+    } | undefined;
+    if (!fallback) {
+      res.json([]);
+      return;
+    }
+    res.json([{
+      id: fallback.id,
+      chatId: fallback.chat_id,
+      name: fallback.name,
+      parentMessageId: fallback.parent_message_id,
+      createdAt: fallback.created_at
+    }]);
+    return;
+  }
+
+  res.json(rows.map((row) => ({
+    id: row.id,
+    chatId: row.chat_id,
+    name: row.name,
+    parentMessageId: row.parent_message_id,
+    createdAt: row.created_at
+  })));
+});
+
 router.get("/:id/timeline", (req, res) => {
   const branchId = resolveBranch(req.params.id, req.query.branchId as string | undefined);
   res.json(getTimeline(req.params.id, branchId));
@@ -654,11 +700,58 @@ router.post("/:id/send", async (req, res: Response) => {
 router.post("/:id/fork", (req, res) => {
   const chatId = req.params.id;
   const { parentMessageId, name } = req.body;
+  if (!parentMessageId) {
+    res.status(400).json({ error: "parentMessageId is required" });
+    return;
+  }
+
+  const parent = db.prepare(
+    "SELECT * FROM messages WHERE id = ? AND chat_id = ? AND deleted = 0"
+  ).get(parentMessageId, chatId) as MessageRow | undefined;
+  if (!parent) {
+    res.status(404).json({ error: "Parent message not found" });
+    return;
+  }
+
   const branchId = newId();
   const ts = now();
-  db.prepare("INSERT INTO branches (id, chat_id, name, parent_message_id, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(branchId, chatId, name, parentMessageId, ts);
-  res.json({ id: branchId, chatId, name, parentMessageId, createdAt: ts });
+  const branchName = String(name || "").trim() || `Branch ${parentMessageId.slice(0, 6)}`;
+  const sourceRows = db.prepare(
+    "SELECT * FROM messages WHERE chat_id = ? AND branch_id = ? AND deleted = 0 AND sort_order <= ? ORDER BY sort_order ASC, created_at ASC, id ASC"
+  ).all(chatId, parent.branch_id, parent.sort_order) as MessageRow[];
+
+  const insertBranch = db.prepare(
+    "INSERT INTO branches (id, chat_id, name, parent_message_id, created_at) VALUES (?, ?, ?, ?, ?)"
+  );
+  const insertMessage = db.prepare(
+    "INSERT INTO messages (id, chat_id, branch_id, role, content, attachments, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
+  );
+
+  const forkTx = db.transaction(() => {
+    insertBranch.run(branchId, chatId, branchName, parentMessageId, ts);
+    const idMap = new Map<string, string>();
+    sourceRows.forEach((row, index) => {
+      const copiedId = newId();
+      idMap.set(row.id, copiedId);
+      const mappedParentId = row.parent_id ? (idMap.get(row.parent_id) ?? null) : null;
+      insertMessage.run(
+        copiedId,
+        chatId,
+        branchId,
+        row.role,
+        row.content,
+        row.attachments || "[]",
+        row.token_count,
+        mappedParentId,
+        row.created_at,
+        row.character_name || null,
+        index + 1
+      );
+    });
+  });
+
+  forkTx();
+  res.json({ id: branchId, chatId, name: branchName, parentMessageId, createdAt: ts });
 });
 
 router.post("/:id/regenerate", async (req, res: Response) => {

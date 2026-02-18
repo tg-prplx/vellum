@@ -4,6 +4,7 @@ import { api, resolveApiAssetUrl } from "../../shared/api";
 import { useI18n } from "../../shared/i18n";
 import { marked } from "marked";
 import type {
+  BranchNode,
   ChatMessage,
   ChatSession,
   FileAttachment,
@@ -108,6 +109,8 @@ export function ChatScreen() {
   const { t } = useI18n();
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [activeChat, setActiveChat] = useState<ChatSession | null>(null);
+  const [branches, setBranches] = useState<BranchNode[]>([]);
+  const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [authorNote, setAuthorNote] = useState(DEFAULT_AUTHOR_NOTE);
@@ -255,6 +258,8 @@ export function ChatScreen() {
   useEffect(() => {
     if (!activeChat) {
       setMessages([]);
+      setBranches([]);
+      setActiveBranchId(null);
       setBlocks([]);
       setChatCharacterIds([]);
       setSceneState({ chatId: "", ...DEFAULT_SCENE_STATE });
@@ -269,9 +274,17 @@ export function ChatScreen() {
     authorNoteInitializedRef.current = false;
     sceneStateInitializedRef.current = false;
 
-    api.chatTimeline(chatId).then((timeline) => {
+    api.chatBranches(chatId).then((list) => {
       if (cancelled) return;
-      setMessages(timeline);
+      setBranches(list);
+      setActiveBranchId((prev) => {
+        if (prev && list.some((branch) => branch.id === prev)) return prev;
+        return list[0]?.id ?? null;
+      });
+    }).catch(() => {
+      if (cancelled) return;
+      setBranches([]);
+      setActiveBranchId(null);
     });
     api.rpGetBlocks(chatId).then((next) => {
       if (cancelled) return;
@@ -334,6 +347,21 @@ export function ChatScreen() {
     };
   }, [activeChat]);
 
+  useEffect(() => {
+    if (!activeChat) return;
+    let cancelled = false;
+    api.chatTimeline(activeChat.id, activeBranchId || undefined).then((timeline) => {
+      if (cancelled) return;
+      setMessages(timeline);
+    }).catch(() => {
+      if (cancelled) return;
+      setMessages([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChat?.id, activeBranchId]);
+
   // Auto-save sampler config when it changes (debounced)
   useEffect(() => {
     if (!activeChat || !samplerInitializedRef.current) return;
@@ -371,8 +399,8 @@ export function ChatScreen() {
 
   const refreshActiveTimeline = useCallback(async () => {
     if (!activeChat) return;
-    setMessages(await api.chatTimeline(activeChat.id));
-  }, [activeChat]);
+    setMessages(await api.chatTimeline(activeChat.id, activeBranchId || undefined));
+  }, [activeChat, activeBranchId]);
 
   const saveBlocksToServer = useCallback(
     (chatId: string, newBlocks: PromptBlock[]) => {
@@ -385,15 +413,15 @@ export function ChatScreen() {
     const character = ids[0] ? characters.find((c) => c.id === ids[0]) : null;
     const title = character ? (ids.length > 1 ? `${character.name} & others` : character.name) : `Session ${new Date().toLocaleTimeString()}`;
     const created = await api.chatCreate(title, ids[0] || undefined, ids.length > 1 ? ids : undefined);
+    const branchList = await api.chatBranches(created.id);
+    const initialBranchId = branchList[0]?.id ?? null;
+    const timeline = await api.chatTimeline(created.id, initialBranchId || undefined);
     setChats((prev) => [created, ...prev]);
     setActiveChat(created);
+    setBranches(branchList);
+    setActiveBranchId(initialBranchId);
     setChatCharacterIds(ids);
-    if (ids.length > 0) {
-      const timeline = await api.chatTimeline(created.id);
-      setMessages(timeline);
-    } else {
-      setMessages([]);
-    }
+    setMessages(timeline);
     setShowCharacterPicker(false);
     setShowMultiCharPanel(false);
     textareaRef.current?.focus();
@@ -404,6 +432,8 @@ export function ChatScreen() {
     setChats((prev) => prev.filter((c) => c.id !== chatId));
     if (activeChat?.id === chatId) {
       setActiveChat(null);
+      setBranches([]);
+      setActiveBranchId(null);
       setMessages([]);
     }
   }
@@ -413,12 +443,17 @@ export function ChatScreen() {
     setErrorText("");
     try {
       let chatId = activeChat?.id;
+      let branchId = activeBranchId;
       if (!chatId) {
         const title = input.trim().slice(0, 40) + (input.trim().length > 40 ? "..." : "");
         const created = await api.chatCreate(title);
         setChats((prev) => [created, ...prev]);
         setActiveChat(created);
         chatId = created.id;
+        const branchList = await api.chatBranches(chatId);
+        setBranches(branchList);
+        branchId = branchList[0]?.id ?? null;
+        setActiveBranchId(branchId);
       }
       await api.rpSetSceneState({ ...sceneState, chatId });
       await api.rpUpdateAuthorNote(chatId, authorNote);
@@ -436,7 +471,7 @@ export function ChatScreen() {
       setAttachments([]);
 
       const optimisticMsg: ChatMessage = {
-        id: `temp-${Date.now()}`, chatId, branchId: "main",
+        id: `temp-${Date.now()}`, chatId, branchId: branchId || "main",
         role: "user", content: outgoing, attachments: currentAttachments, tokenCount: 0, createdAt: new Date().toISOString()
       };
       setMessages((prev) => [...prev, optimisticMsg]);
@@ -444,7 +479,7 @@ export function ChatScreen() {
       setStreaming(true);
       setStreamingCharacterName(null);
 
-      const updated = await api.chatSend(chatId, outgoing, undefined, {
+      const updated = await api.chatSend(chatId, outgoing, branchId || undefined, {
         onDelta: (delta) => setStreamText((prev) => prev + delta),
         onDone: () => { setStreaming(false); setStreamText(""); setStreamingCharacterName(null); }
       }, activePersonaPayload, currentAttachments);
@@ -484,7 +519,7 @@ export function ChatScreen() {
         if (last?.role === "assistant") return prev.slice(0, -1);
         return prev;
       });
-      const updated = await api.chatRegenerate(activeChat.id, undefined, {
+      const updated = await api.chatRegenerate(activeChat.id, activeBranchId || undefined, {
         onDelta: (delta) => setStreamText((prev) => prev + delta),
         onDone: () => { setStreaming(false); setStreamText(""); setStreamingCharacterName(null); }
       });
@@ -502,7 +537,7 @@ export function ChatScreen() {
     setErrorText("");
     setCompressing(true);
     try {
-      const result = await api.chatCompressContext(activeChat.id);
+      const result = await api.chatCompressContext(activeChat.id, activeBranchId || undefined);
       setContextSummary(result.summary);
       setInspectorSection((prev) => ({ ...prev, context: true }));
     } catch (error) {
@@ -562,7 +597,15 @@ export function ChatScreen() {
 
   async function handleFork(message: ChatMessage) {
     if (!activeChat) return;
-    await api.chatFork(activeChat.id, message.id, `Branch ${message.id.slice(0, 6)}`);
+    try {
+      const branch = await api.chatFork(activeChat.id, message.id, `Branch ${message.id.slice(0, 6)}`);
+      const branchList = await api.chatBranches(activeChat.id);
+      setBranches(branchList);
+      setActiveBranchId(branch.id);
+      setMessages(await api.chatTimeline(activeChat.id, branch.id));
+    } catch (error) {
+      setErrorText(String(error));
+    }
   }
 
   async function handleDelete(messageId: string) {
@@ -627,7 +670,7 @@ export function ChatScreen() {
     setStreaming(true);
     setStreamingCharacterName(characterName);
     try {
-      const updated = await api.chatNextTurn(activeChat.id, characterName, undefined, {
+      const updated = await api.chatNextTurn(activeChat.id, characterName, activeBranchId || undefined, {
         onDelta: (delta) => setStreamText((prev) => prev + delta),
         onDone: () => { setStreaming(false); setStreamText(""); setStreamingCharacterName(null); }
       }, false, activePersonaPayload);
@@ -667,7 +710,7 @@ export function ChatScreen() {
       setStreamingCharacterName(charName);
 
       try {
-        const updated = await api.chatNextTurn(activeChat.id, charName, undefined, {
+        const updated = await api.chatNextTurn(activeChat.id, charName, activeBranchId || undefined, {
           onDelta: (delta) => setStreamText((prev) => prev + delta),
           onDone: () => { setStreaming(false); setStreamText(""); setStreamingCharacterName(null); }
         }, true, activePersonaPayload); // isAutoConvo = true
@@ -1077,6 +1120,20 @@ export function ChatScreen() {
               <div className="flex items-center gap-2">
                 <PanelTitle>{activeChat ? activeChat.title : t("tab.chat")}</PanelTitle>
                 {totalTokens > 0 && <Badge>{totalTokens.toLocaleString()} tok</Badge>}
+                {branches.length > 0 && (
+                  <select
+                    value={activeBranchId || ""}
+                    onChange={(e) => setActiveBranchId(e.target.value || null)}
+                    className="rounded-md border border-border bg-bg-primary px-2 py-0.5 text-[10px] text-text-secondary"
+                    title="Branch"
+                  >
+                    {branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="flex gap-1.5">
                 {streaming && (

@@ -195,6 +195,7 @@ export const api = {
     post<ChatSession>("/chats", { title, characterId, characterIds }),
   chatAbort: (chatId: string) => post<{ ok: boolean; interrupted: boolean }>(`/chats/${chatId}/abort`),
   chatDelete: (chatId: string) => del<{ ok: boolean }>(`/chats/${chatId}`),
+  chatBranches: (chatId: string) => get<BranchNode[]>(`/chats/${chatId}/branches`),
   chatUpdateCharacters: (chatId: string, characterIds: string[]) =>
     patchReq<{ ok: boolean }>(`/chats/${chatId}/characters`, { characterIds }),
   chatNextTurn: async (chatId: string, characterName: string, branchId?: string, callbacks?: StreamCallbacks, isAutoConvo?: boolean, userPersona?: UserPersonaPayload | null): Promise<ChatMessage[]> => {
