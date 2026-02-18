@@ -5,9 +5,6 @@ on:
   push:
     tags:
       - "v*"
-  release:
-    types:
-      - published
 
 permissions:
   contents: write
@@ -44,8 +41,7 @@ jobs:
         run: |
           npm run build:desktop
           npm run rebuild:native:electron
-          npx electron-builder --mac --arm64 --publish never
-          npx electron-builder --mac --x64 --publish never
+          npx electron-builder --mac --arm64 --x64 --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -108,15 +104,33 @@ jobs:
         with:
           path: release-assets
 
+      - name: Prepare unique release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          while IFS= read -r file; do
+            base="$(basename "$file")"
+            if [ ! -f "release-upload/$base" ]; then
+              cp "$file" "release-upload/$base"
+            fi
+          done < <(find release-assets -type f \( \
+            -name "*.dmg" -o \
+            -name "*.dmg.blockmap" -o \
+            -name "*Setup*.exe" -o \
+            -name "*Setup*.exe.blockmap" -o \
+            -name "latest.yml" -o \
+            -name "latest-mac.yml" -o \
+            -name "latest-mac-arm64.yml" \
+          \) | sort)
+          ls -la release-upload
+          test -n "$(ls -A release-upload)"
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+          overwrite_files: true
           files: |
-            release-assets/**/*.dmg
-            release-assets/**/Vellum Setup*.exe
-            release-assets/**/Vellum Setup*.exe.blockmap
-            release-assets/**/*.dmg.blockmap
-            release-assets/**/latest.yml
-            release-assets/**/latest-mac*.yml
+            release-upload/*
