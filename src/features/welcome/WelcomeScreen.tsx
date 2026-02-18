@@ -7,12 +7,12 @@ import type { AppSettings } from "../../shared/types/contracts";
 type WelcomeScreenProps = {
   initialSettings: AppSettings;
   onComplete: (patch: Partial<AppSettings>) => Promise<void>;
-  onPreviewLocale: (locale: "en" | "ru") => void;
+  onPreviewLocale: (locale: "en" | "ru" | "zh" | "ja") => void;
 };
 
 export function WelcomeScreen({ initialSettings, onComplete, onPreviewLocale }: WelcomeScreenProps) {
   const { t } = useI18n();
-  const [interfaceLanguage, setInterfaceLanguage] = useState<"en" | "ru">(initialSettings.interfaceLanguage || "en");
+  const [interfaceLanguage, setInterfaceLanguage] = useState<"en" | "ru" | "zh" | "ja">(initialSettings.interfaceLanguage || "en");
   const [responseLanguage, setResponseLanguage] = useState(initialSettings.responseLanguage || "English");
   const [theme, setTheme] = useState<AppSettings["theme"]>(initialSettings.theme || "dark");
   const [censorshipMode, setCensorshipMode] = useState<AppSettings["censorshipMode"]>(initialSettings.censorshipMode || "Unfiltered");
@@ -131,7 +131,7 @@ export function WelcomeScreen({ initialSettings, onComplete, onPreviewLocale }: 
               <select
                 value={interfaceLanguage}
                 onChange={(e) => {
-                  const next = e.target.value as "en" | "ru";
+                  const next = e.target.value as "en" | "ru" | "zh" | "ja";
                   setInterfaceLanguage(next);
                   onPreviewLocale(next);
                 }}
@@ -139,6 +139,8 @@ export function WelcomeScreen({ initialSettings, onComplete, onPreviewLocale }: 
               >
                 <option value="en">English</option>
                 <option value="ru">Русский</option>
+                <option value="zh">简体中文</option>
+                <option value="ja">日本語</option>
               </select>
             </div>
 
