@@ -9,6 +9,7 @@ export interface ProviderProfile {
   apiKeyMasked: string;
   proxyUrl?: string | null;
   fullLocalOnly: boolean;
+  providerType?: "openai" | "koboldcpp";
 }
 
 export interface ProviderModel {
@@ -22,6 +23,18 @@ export interface SamplerConfig {
   presencePenalty: number;
   maxTokens: number;
   stop: string[];
+  topK?: number;
+  topA?: number;
+  minP?: number;
+  typical?: number;
+  tfs?: number;
+  repetitionPenalty?: number;
+  repetitionPenaltyRange?: number;
+  repetitionPenaltySlope?: number;
+  samplerOrder?: number[];
+  koboldMemory?: string;
+  koboldBannedPhrases?: string[];
+  koboldUseDefaultBadwords?: boolean;
 }
 
 export interface PromptBlock {

@@ -187,7 +187,13 @@ export function ChatScreen() {
   // Sampler state
   const [samplerConfig, setSamplerConfig] = useState<SamplerConfig>({
     temperature: 0.9, topP: 1.0, frequencyPenalty: 0.0,
-    presencePenalty: 0.0, maxTokens: 2048, stop: []
+    presencePenalty: 0.0, maxTokens: 2048, stop: [],
+    topK: 100, topA: 0, minP: 0, typical: 1, tfs: 1,
+    repetitionPenalty: 1.1, repetitionPenaltyRange: 0, repetitionPenaltySlope: 1,
+    samplerOrder: [6, 0, 1, 3, 4, 2, 5],
+    koboldMemory: "",
+    koboldBannedPhrases: [],
+    koboldUseDefaultBadwords: true
   });
 
   // File attachments
@@ -279,6 +285,10 @@ export function ChatScreen() {
       scenario: activePersona.scenario || ""
     };
   }, [activePersona]);
+  const activeProviderType = useMemo(() => {
+    const provider = providers.find((item) => item.id === chatProviderId);
+    return provider?.providerType || "openai";
+  }, [providers, chatProviderId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1838,6 +1848,71 @@ export function ChatScreen() {
                         className="w-20 rounded border border-border bg-bg-primary px-1.5 py-0.5 text-right text-[10px] text-text-primary" />
                     </div>
                   </div>
+                  {activeProviderType === "koboldcpp" && (
+                    <>
+                      {[
+                        { key: "topK" as const, label: "Top-K", min: 0, max: 300, step: 1 },
+                        { key: "topA" as const, label: "Top-A", min: 0, max: 1, step: 0.01 },
+                        { key: "minP" as const, label: "Min-P", min: 0, max: 1, step: 0.01 },
+                        { key: "typical" as const, label: "Typical", min: 0, max: 1, step: 0.01 },
+                        { key: "tfs" as const, label: "TFS", min: 0, max: 1, step: 0.01 },
+                        { key: "repetitionPenalty" as const, label: "Repetition Penalty", min: 0, max: 2, step: 0.01 }
+                      ].map(({ key, label, min, max, step }) => (
+                        <div key={key}>
+                          <div className="mb-1 flex items-center justify-between">
+                            <label className="text-[10px] text-text-tertiary">{label}</label>
+                            <span className="text-[10px] font-medium text-text-secondary">{Number(samplerConfig[key] ?? 0).toFixed(2)}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={min}
+                            max={max}
+                            step={step}
+                            value={Number(samplerConfig[key] ?? 0)}
+                            onChange={(e) => setSamplerConfig((p) => ({ ...p, [key]: Number(e.target.value) }))}
+                            className="w-full"
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <div className="mb-1 flex items-center justify-between">
+                          <label className="text-[10px] text-text-tertiary">Memory</label>
+                        </div>
+                        <textarea
+                          value={samplerConfig.koboldMemory || ""}
+                          onChange={(e) => setSamplerConfig((p) => ({ ...p, koboldMemory: e.target.value }))}
+                          className="h-20 w-full rounded border border-border bg-bg-primary px-2 py-1 text-[10px] text-text-primary"
+                          placeholder="Persistent memory/context for KoboldCpp"
+                        />
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between">
+                          <label className="text-[10px] text-text-tertiary">Phrase Bans</label>
+                        </div>
+                        <input
+                          type="text"
+                          value={(samplerConfig.koboldBannedPhrases || []).join(", ")}
+                          onChange={(e) => setSamplerConfig((p) => ({
+                            ...p,
+                            koboldBannedPhrases: e.target.value
+                              .split(",")
+                              .map((item) => item.trim())
+                              .filter(Boolean)
+                          }))}
+                          className="w-full rounded border border-border bg-bg-primary px-2 py-1 text-[10px] text-text-primary"
+                          placeholder="phrase one, phrase two"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded border border-border-subtle bg-bg-secondary px-2 py-1.5">
+                        <label className="text-[10px] text-text-tertiary">Use default badwords</label>
+                        <input
+                          type="checkbox"
+                          checked={samplerConfig.koboldUseDefaultBadwords !== false}
+                          onChange={(e) => setSamplerConfig((p) => ({ ...p, koboldUseDefaultBadwords: e.target.checked }))}
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db, maskApiKey, isLocalhostUrl } from "../db.js";
+import { fetchKoboldModels, normalizeProviderType, testKoboldConnection } from "../services/providerApi.js";
 
 const router = Router();
 
@@ -10,6 +11,7 @@ interface ProviderRow {
   api_key_cipher: string;
   proxy_url: string | null;
   full_local_only: number;
+  provider_type: string;
 }
 
 function rowToProfile(row: ProviderRow) {
@@ -19,7 +21,8 @@ function rowToProfile(row: ProviderRow) {
     baseUrl: row.base_url,
     apiKeyMasked: maskApiKey(row.api_key_cipher),
     proxyUrl: row.proxy_url,
-    fullLocalOnly: Boolean(row.full_local_only)
+    fullLocalOnly: Boolean(row.full_local_only),
+    providerType: normalizeProviderType(row.provider_type)
   };
 }
 
@@ -29,18 +32,20 @@ function getSettings() {
 }
 
 router.post("/", (req, res) => {
-  const { id, name, baseUrl, apiKey, proxyUrl, fullLocalOnly } = req.body;
+  const { id, name, baseUrl, apiKey, proxyUrl, fullLocalOnly, providerType } = req.body;
+  const normalizedType = normalizeProviderType(providerType);
 
   db.prepare(`
-    INSERT INTO providers (id, name, base_url, api_key_cipher, proxy_url, full_local_only)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO providers (id, name, base_url, api_key_cipher, proxy_url, full_local_only, provider_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       base_url = excluded.base_url,
       api_key_cipher = excluded.api_key_cipher,
       proxy_url = excluded.proxy_url,
-      full_local_only = excluded.full_local_only
-  `).run(id, name, baseUrl, apiKey || "local-key", proxyUrl || null, fullLocalOnly ? 1 : 0);
+      full_local_only = excluded.full_local_only,
+      provider_type = excluded.provider_type
+  `).run(id, name, baseUrl, apiKey || "local-key", proxyUrl || null, fullLocalOnly ? 1 : 0, normalizedType);
 
   const row = db.prepare("SELECT * FROM providers WHERE id = ?").get(id) as ProviderRow;
   res.json(rowToProfile(row));
@@ -66,6 +71,14 @@ router.get("/:id/models", async (req, res) => {
   }
 
   try {
+    const providerType = normalizeProviderType(row.provider_type);
+    if (providerType === "koboldcpp") {
+      const koboldModels = await fetchKoboldModels(row);
+      const models = koboldModels.length > 0 ? koboldModels : ["koboldcpp"];
+      res.json(models.map((id) => ({ id })));
+      return;
+    }
+
     const response = await fetch(`${row.base_url}/models`, {
       headers: { Authorization: `Bearer ${row.api_key_cipher}` }
     });
@@ -86,7 +99,7 @@ router.post("/set-active", (req, res) => {
   res.json(updated);
 });
 
-router.post("/:id/test", (req, res) => {
+router.post("/:id/test", async (req, res) => {
   const row = db.prepare("SELECT * FROM providers WHERE id = ?").get(req.params.id) as ProviderRow | undefined;
   if (!row) { res.json(false); return; }
 
@@ -97,6 +110,13 @@ router.post("/:id/test", (req, res) => {
   }
   if (row.full_local_only && !isLocalhostUrl(row.base_url)) {
     res.json(false);
+    return;
+  }
+
+  const providerType = normalizeProviderType(row.provider_type);
+  if (providerType === "koboldcpp") {
+    const ok = await testKoboldConnection(row);
+    res.json(ok);
     return;
   }
 

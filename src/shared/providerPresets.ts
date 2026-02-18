@@ -7,6 +7,7 @@ export type ProviderPreset = {
   defaultName: string;
   apiKeyHint: string;
   localOnly: boolean;
+  providerType: "openai" | "koboldcpp";
 };
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -18,7 +19,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultId: "openai",
     defaultName: "OpenAI",
     apiKeyHint: "sk-...",
-    localOnly: false
+    localOnly: false,
+    providerType: "openai"
   },
   {
     key: "lm_studio",
@@ -28,7 +30,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultId: "lm-studio",
     defaultName: "LM Studio (Local)",
     apiKeyHint: "any string",
-    localOnly: true
+    localOnly: true,
+    providerType: "openai"
   },
   {
     key: "ollama",
@@ -38,7 +41,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultId: "ollama",
     defaultName: "Ollama (Local)",
     apiKeyHint: "ollama",
-    localOnly: true
+    localOnly: true,
+    providerType: "openai"
+  },
+  {
+    key: "koboldcpp",
+    label: "KoboldCpp",
+    description: "Native KoboldCpp API with memory + phrase banning",
+    baseUrl: "http://localhost:5001",
+    defaultId: "koboldcpp",
+    defaultName: "KoboldCpp (Local)",
+    apiKeyHint: "optional",
+    localOnly: true,
+    providerType: "koboldcpp"
   },
   {
     key: "openrouter",
@@ -48,7 +63,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultId: "openrouter",
     defaultName: "OpenRouter",
     apiKeyHint: "sk-or-v1-...",
-    localOnly: false
+    localOnly: false,
+    providerType: "openai"
   },
   {
     key: "custom",
@@ -58,6 +74,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultId: "custom-provider",
     defaultName: "Custom Provider",
     apiKeyHint: "your key",
-    localOnly: false
+    localOnly: false,
+    providerType: "openai"
   }
 ];

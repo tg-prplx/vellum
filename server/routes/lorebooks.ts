@@ -15,7 +15,7 @@ interface LoreBookRow {
 }
 
 function rowToJson(row: LoreBookRow) {
-  let entries = [];
+  let entries = normalizeLoreBookEntries([]);
   try {
     entries = normalizeLoreBookEntries(JSON.parse(row.entries_json || "[]"));
   } catch {

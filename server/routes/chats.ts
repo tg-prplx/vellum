@@ -1,10 +1,19 @@
 import { Router } from "express";
 import { db, newId, now, roughTokenCount, isLocalhostUrl, DEFAULT_SETTINGS, nextSortOrder } from "../db.js";
 import { buildSystemPrompt, buildMessageArray, buildMultiCharSystemPrompt, buildMultiCharMessageArray, mergeConsecutiveRoles, DEFAULT_PROMPT_BLOCKS } from "../domain/rpEngine.js";
-import type { PromptBlock, CharacterCardData } from "../domain/rpEngine.js";
+import type { PromptBlock, CharacterCardData, ChatAttachment } from "../domain/rpEngine.js";
 import type { Response } from "express";
 import { prepareMcpTools, type McpServerConfig } from "../services/mcp.js";
 import { getTriggeredLoreEntries, injectLoreBlocks, normalizeLoreBookEntries, type LoreBookEntryData } from "../domain/lorebooks.js";
+import {
+  buildKoboldGenerateBody,
+  countKoboldTokens,
+  extractKoboldGeneratedText,
+  extractKoboldStreamDelta,
+  normalizeProviderType,
+  requestKoboldGenerate,
+  requestKoboldGenerateStream
+} from "../services/providerApi.js";
 
 const router = Router();
 
@@ -41,6 +50,7 @@ interface ProviderRow {
   base_url: string;
   api_key_cipher: string;
   full_local_only: number;
+  provider_type: string;
 }
 
 interface LoreBookRow {
@@ -226,6 +236,29 @@ function sanitizeAttachments(input: unknown): MessageAttachmentPayload[] {
   return out.slice(0, 12);
 }
 
+function toChatAttachments(input: MessageAttachmentPayload[] | null | undefined): ChatAttachment[] {
+  if (!Array.isArray(input)) return [];
+  const out: ChatAttachment[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "image") {
+      out.push({
+        type: "image",
+        dataUrl: String(item.dataUrl || ""),
+        filename: String(item.filename || "")
+      });
+      continue;
+    }
+    if (item.type === "text") {
+      out.push({
+        type: "text",
+        filename: String(item.filename || "")
+      });
+    }
+  }
+  return out;
+}
+
 function getContextWindowBudget(settings: Record<string, unknown>): number {
   const raw = Number(settings.contextWindowSize);
   if (!Number.isFinite(raw) || raw <= 0) return 8192;
@@ -328,6 +361,60 @@ function normalizeAssistantContent(content: unknown): string {
   return String(content);
 }
 
+function flattenContentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return String(content ?? "");
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as { type?: unknown; text?: unknown };
+    if (row.type === "text") parts.push(String(row.text ?? ""));
+    if (row.type === "image_url") parts.push("[Image attachment]");
+  }
+  return parts.join("\n").trim();
+}
+
+function buildKoboldPromptFromMessages(
+  messages: Array<{ role: string; content: unknown }>,
+  samplerConfig: Record<string, unknown>
+): { prompt: string; memory: string } {
+  const systemParts: string[] = [];
+  const convoParts: string[] = [];
+  for (const msg of messages) {
+    const role = String(msg.role || "user");
+    const text = flattenContentToText(msg.content).trim();
+    if (!text) continue;
+    if (role === "system") {
+      systemParts.push(text);
+      continue;
+    }
+    if (role === "assistant") {
+      convoParts.push(`Assistant: ${text}`);
+      continue;
+    }
+    if (role === "tool") {
+      convoParts.push(`Tool: ${text}`);
+      continue;
+    }
+    convoParts.push(`User: ${text}`);
+  }
+
+  const customMemory = String(samplerConfig.koboldMemory || "").trim();
+  const memory = [customMemory, ...systemParts].filter(Boolean).join("\n\n");
+  const prompt = [...convoParts, "Assistant:"].join("\n\n");
+  return { prompt, memory };
+}
+
+async function countProviderTokens(provider: ProviderRow | null | undefined, content: string): Promise<number> {
+  const text = String(content || "");
+  if (!text) return 0;
+  if (!provider || normalizeProviderType(provider.provider_type) !== "koboldcpp") {
+    return roughTokenCount(text);
+  }
+  const counted = await countKoboldTokens(provider, text);
+  return counted ?? roughTokenCount(text);
+}
+
 async function sendSseText(res: Response, chatId: string, text: string, paceMs = 0) {
   const chunks = text.match(/[\s\S]{1,140}/g) ?? [];
   for (const chunk of chunks) {
@@ -418,7 +505,8 @@ async function requestChatCompletion(
   body: Record<string, unknown>,
   signal: AbortSignal
 ) {
-  const response = await fetch(`${provider.base_url}/chat/completions`, {
+  const baseUrl = String(provider.base_url || "").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -603,14 +691,86 @@ function deleteMessageTree(chatId: string, branchId: string, messageId: string) 
 async function streamProviderCompletion(params: {
   provider: ProviderRow;
   modelId: string;
-  messages: unknown;
+  messages: Array<{ role: string; content: unknown }>;
   samplerConfig: Record<string, unknown>;
   chatId: string;
   res: Response;
   signal: AbortSignal;
 }) {
+  const providerType = normalizeProviderType(params.provider.provider_type);
   const sc = params.samplerConfig;
-  const response = await fetch(`${params.provider.base_url}/chat/completions`, {
+  if (providerType === "koboldcpp") {
+    const { prompt, memory } = buildKoboldPromptFromMessages(params.messages, sc);
+    const body = buildKoboldGenerateBody({
+      prompt,
+      memory,
+      samplerConfig: sc
+    });
+
+    const streamResponse = await requestKoboldGenerateStream(params.provider, body, params.signal);
+    if (streamResponse.ok && streamResponse.body) {
+      let fullContent = "";
+      const reader = streamResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          if (params.signal.aborted) {
+            await reader.cancel();
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const data = trimmed.startsWith("data: ")
+              ? trimmed.slice(6).trim()
+              : trimmed;
+            if (!data || data === "[DONE]") continue;
+
+            let delta = "";
+            try {
+              delta = extractKoboldStreamDelta(JSON.parse(data));
+            } catch {
+              delta = data;
+            }
+            if (!delta) continue;
+            fullContent += delta;
+            params.res.write(`data: ${JSON.stringify({ type: "delta", chatId: params.chatId, delta })}\n\n`);
+          }
+        }
+      } catch (readErr) {
+        if (!(readErr instanceof Error && readErr.name === "AbortError")) {
+          throw readErr;
+        }
+      }
+
+      if (fullContent.trim()) return fullContent;
+    }
+
+    const fallbackResponse = await requestKoboldGenerate(params.provider, body, params.signal);
+    if (!fallbackResponse.ok) {
+      const errText = await fallbackResponse.text().catch(() => "Unknown error");
+      throw new Error(`[KoboldCpp API Error: ${fallbackResponse.status}] ${errText.slice(0, 200)}`);
+    }
+    const fallbackBody = await fallbackResponse.json().catch(() => ({}));
+    const generated = extractKoboldGeneratedText(fallbackBody);
+    if (generated) {
+      await sendSseText(params.res, params.chatId, generated, 8);
+    }
+    return generated;
+  }
+
+  const baseUrl = String(params.provider.base_url || "").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -679,6 +839,55 @@ async function streamProviderCompletion(params: {
   }
 
   return fullContent;
+}
+
+async function completeProviderOnce(params: {
+  provider: ProviderRow;
+  modelId: string;
+  systemPrompt: string;
+  userPrompt: string;
+  samplerConfig?: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const providerType = normalizeProviderType(params.provider.provider_type);
+  const sc = params.samplerConfig || {};
+
+  if (providerType === "koboldcpp") {
+    const body = buildKoboldGenerateBody({
+      prompt: `User: ${params.userPrompt}\n\nAssistant:`,
+      memory: params.systemPrompt,
+      samplerConfig: {
+        ...sc,
+        maxTokens: sc.maxTokens ?? 1024
+      }
+    });
+    const response = await requestKoboldGenerate(params.provider, body, params.signal);
+    if (!response.ok) return "";
+    const parsed = await response.json().catch(() => ({}));
+    return extractKoboldGeneratedText(parsed).trim();
+  }
+
+  const baseUrl = String(params.provider.base_url || "").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.provider.api_key_cipher}`
+    },
+    body: JSON.stringify({
+      model: params.modelId,
+      messages: [
+        { role: "system", content: params.systemPrompt },
+        { role: "user", content: params.userPrompt }
+      ],
+      temperature: sc.temperature ?? 0.3,
+      max_tokens: sc.maxTokens ?? 1024
+    }),
+    signal: params.signal
+  });
+  if (!response.ok) return "";
+  const body = await response.json() as { choices?: { message?: { content?: string } }[] };
+  return body.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 // Core LLM streaming function — used by send, regenerate, auto-conversation
@@ -751,6 +960,12 @@ async function streamLlmResponse(
   const effectiveBlocks = triggeredLoreEntries.length > 0
     ? injectLoreBlocks(blocks, triggeredLoreEntries)
     : blocks;
+  const promptTimelineForModel = promptTimeline.map((item) => ({
+    role: item.role,
+    content: String(item.content || ""),
+    characterName: item.characterName,
+    attachments: toChatAttachments(item.attachments as MessageAttachmentPayload[] | undefined)
+  }));
 
   let systemPrompt: string;
   if (characterCards.length > 1 && overrideCharacterName) {
@@ -797,7 +1012,7 @@ async function streamLlmResponse(
   if (characterCards.length > 1 && overrideCharacterName) {
     apiMessages = buildMultiCharMessageArray(
       systemPrompt,
-      promptTimeline,
+      promptTimelineForModel,
       overrideCharacterName,
       authorNote,
       contextSummary,
@@ -806,7 +1021,7 @@ async function streamLlmResponse(
   } else {
     apiMessages = buildMessageArray(
       systemPrompt,
-      promptTimeline,
+      promptTimelineForModel,
       authorNote,
       contextSummary,
       currentCharCard?.name,
@@ -865,7 +1080,8 @@ async function streamLlmResponse(
 
   try {
     const sc = samplerConfig as Record<string, unknown>;
-    const toolCallingEnabled = settings.toolCallingEnabled === true;
+    const toolCallingEnabled = settings.toolCallingEnabled === true
+      && normalizeProviderType(provider.provider_type) === "openai";
     if (toolCallingEnabled) {
       const toolResult = await runToolCallingCompletion({
         provider,
@@ -894,7 +1110,7 @@ async function streamLlmResponse(
           fullContent = await streamProviderCompletion({
             provider,
             modelId,
-            messages: toolResult.streamMessages,
+            messages: toolResult.streamMessages as Array<{ role: string; content: unknown }>,
             samplerConfig: sc,
             chatId,
             res,
@@ -910,14 +1126,14 @@ async function streamLlmResponse(
             "INSERT INTO messages (id, chat_id, branch_id, role, content, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
           ).run(
             assistantId,
-            chatId,
-            branchId,
-            "assistant",
-            fullContent,
-            roughTokenCount(fullContent),
-            parentMsgId,
-            now(),
-            overrideCharacterName || null,
+              chatId,
+              branchId,
+              "assistant",
+              fullContent,
+              await countProviderTokens(provider, fullContent),
+              parentMsgId,
+              now(),
+              overrideCharacterName || null,
             nextSortOrder(chatId, branchId)
           );
           for (const toolCall of toolResult.toolCalls) {
@@ -959,7 +1175,18 @@ async function streamLlmResponse(
       const assistantId = newId();
       db.prepare(
         "INSERT INTO messages (id, chat_id, branch_id, role, content, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
-      ).run(assistantId, chatId, branchId, "assistant", fullContent, roughTokenCount(fullContent), parentMsgId, now(), overrideCharacterName || null, nextSortOrder(chatId, branchId));
+      ).run(
+        assistantId,
+        chatId,
+        branchId,
+        "assistant",
+        fullContent,
+        await countProviderTokens(provider, fullContent),
+        parentMsgId,
+        now(),
+        overrideCharacterName || null,
+        nextSortOrder(chatId, branchId)
+      );
     }
 
     res.write(`data: ${JSON.stringify({ type: "done", chatId })}\n\n`);
@@ -1153,6 +1380,12 @@ router.post("/:id/send", async (req, res: Response) => {
   try { charIds = JSON.parse(chat?.character_ids || "[]"); } catch { /* empty */ }
   const isMultiChar = charIds.length > 1;
   const senderName = (persona.name || "").trim() || "User";
+  const settings = getSettings();
+  const activeProviderId = String(settings.activeProviderId || "").trim();
+  const activeProvider = activeProviderId
+    ? db.prepare("SELECT * FROM providers WHERE id = ?").get(activeProviderId) as ProviderRow | undefined
+    : undefined;
+  const userTokenCount = await countProviderTokens(activeProvider, String(content || ""));
 
   // Insert user message — with character_name set to user persona name in multi-char mode
   const userId = newId();
@@ -1166,7 +1399,7 @@ router.post("/:id/send", async (req, res: Response) => {
     "user",
     String(content || ""),
     JSON.stringify(attachments),
-    roughTokenCount(String(content || "")),
+    userTokenCount,
     null,
     userTs,
     isMultiChar ? senderName : "",
@@ -1299,20 +1532,15 @@ router.post("/:id/compress", async (req, res: Response) => {
 
   const messagesToSummarize = timeline.map((m) => `[${m.role}]: ${m.content}`).join("\n\n");
   const compressTemplate = settings.promptTemplates?.compressSummary || "Summarize the following roleplay conversation. Preserve key plot points, character details, relationships, and important events. Be concise but thorough.";
-  const summaryPrompt = [
-    { role: "system", content: compressTemplate },
-    { role: "user", content: messagesToSummarize }
-  ];
 
   try {
-    const response = await fetch(`${provider.base_url}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.api_key_cipher}` },
-      body: JSON.stringify({ model: modelId, messages: summaryPrompt, temperature: 0.3, max_tokens: 1024 })
+    const summary = await completeProviderOnce({
+      provider,
+      modelId,
+      systemPrompt: compressTemplate,
+      userPrompt: messagesToSummarize,
+      samplerConfig: { temperature: 0.3, maxTokens: 1024 }
     });
-
-    const body = await response.json() as { choices?: { message?: { content?: string } }[] };
-    const summary = body.choices?.[0]?.message?.content ?? "";
 
     db.prepare("UPDATE chats SET context_summary = ? WHERE id = ?").run(summary, chatId);
     res.json({ summary });
@@ -1344,22 +1572,13 @@ router.post("/messages/:id/translate", async (req, res: Response) => {
   const lang = targetLanguage || settings.responseLanguage || "English";
 
   try {
-    const response = await fetch(`${provider.base_url}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.api_key_cipher}` },
-      body: JSON.stringify({
-        model: modelId,
-        messages: [
-          { role: "system", content: `Translate the following message to ${lang}. Output ONLY the translation, nothing else. Preserve formatting, line breaks, and markdown.` },
-          { role: "user", content: message.content }
-        ],
-        temperature: 0.2,
-        max_tokens: 2048
-      })
+    const translation = await completeProviderOnce({
+      provider,
+      modelId,
+      systemPrompt: `Translate the following message to ${lang}. Output ONLY the translation, nothing else. Preserve formatting, line breaks, and markdown.`,
+      userPrompt: message.content,
+      samplerConfig: { temperature: 0.2, maxTokens: 2048 }
     });
-
-    const body = await response.json() as { choices?: { message?: { content?: string } }[] };
-    const translation = body.choices?.[0]?.message?.content ?? message.content;
     res.json({ translation });
   } catch {
     res.json({ translation: message.content });

@@ -3,6 +3,7 @@ import { writeFileSync } from "fs";
 import { join } from "path";
 import { db, newId, now, roughTokenCount, DATA_DIR, DEFAULT_SETTINGS } from "../db.js";
 import { runConsistency } from "../domain/writerEngine.js";
+import { buildKoboldGenerateBody, extractKoboldGeneratedText, normalizeProviderType, requestKoboldGenerate } from "../services/providerApi.js";
 
 const router = Router();
 
@@ -11,6 +12,7 @@ interface ProviderRow {
   base_url: string;
   api_key_cipher: string;
   full_local_only: number;
+  provider_type: string;
 }
 
 interface WriterChapterSettings {
@@ -170,6 +172,38 @@ async function callLlm(systemPrompt: string, userPrompt: string, sampler?: Write
   if (!provider) return "[Provider not found]";
 
   try {
+    const providerType = normalizeProviderType(provider.provider_type);
+    if (providerType === "koboldcpp") {
+      const body = buildKoboldGenerateBody({
+        prompt: `User: ${userPrompt}\n\nAssistant:`,
+        memory: systemPrompt,
+        samplerConfig: {
+          temperature: sampler?.temperature ?? settings.samplerConfig.temperature ?? 0.9,
+          maxTokens: sampler?.maxTokens ?? settings.samplerConfig.maxTokens ?? 2048,
+          topP: settings.samplerConfig.topP,
+          stop: settings.samplerConfig.stop,
+          topK: settings.samplerConfig.topK,
+          topA: settings.samplerConfig.topA,
+          minP: settings.samplerConfig.minP,
+          typical: settings.samplerConfig.typical,
+          tfs: settings.samplerConfig.tfs,
+          repetitionPenalty: settings.samplerConfig.repetitionPenalty,
+          repetitionPenaltyRange: settings.samplerConfig.repetitionPenaltyRange,
+          repetitionPenaltySlope: settings.samplerConfig.repetitionPenaltySlope,
+          samplerOrder: settings.samplerConfig.samplerOrder,
+          koboldUseDefaultBadwords: settings.samplerConfig.koboldUseDefaultBadwords,
+          koboldBannedPhrases: settings.samplerConfig.koboldBannedPhrases
+        }
+      });
+      const response = await requestKoboldGenerate(provider, body);
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "KoboldCpp error");
+        return `[KoboldCpp Error] ${errText.slice(0, 500)}`;
+      }
+      const payload = await response.json().catch(() => ({}));
+      return extractKoboldGeneratedText(payload) || "[Empty response]";
+    }
+
     const response = await fetch(`${provider.base_url}/chat/completions`, {
       method: "POST",
       headers: {

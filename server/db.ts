@@ -49,7 +49,8 @@ db.exec(`
     base_url TEXT NOT NULL,
     api_key_cipher TEXT NOT NULL,
     proxy_url TEXT,
-    full_local_only INTEGER NOT NULL DEFAULT 0
+    full_local_only INTEGER NOT NULL DEFAULT 0,
+    provider_type TEXT NOT NULL DEFAULT 'openai'
   );
 
   CREATE TABLE IF NOT EXISTS chats (
@@ -213,7 +214,8 @@ const migrations = [
   "ALTER TABLE chats ADD COLUMN lorebook_id TEXT",
   "ALTER TABLE characters ADD COLUMN lorebook_id TEXT",
   "ALTER TABLE writer_projects ADD COLUMN character_ids TEXT NOT NULL DEFAULT '[]'",
-  "ALTER TABLE writer_chapters ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'"
+  "ALTER TABLE writer_chapters ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'",
+  "ALTER TABLE providers ADD COLUMN provider_type TEXT NOT NULL DEFAULT 'openai'"
 ];
 
 for (const sql of migrations) {
@@ -261,7 +263,19 @@ const DEFAULT_SETTINGS = {
     frequencyPenalty: 0.0,
     presencePenalty: 0.0,
     maxTokens: 2048,
-    stop: [] as string[]
+    stop: [] as string[],
+    topK: 100,
+    topA: 0,
+    minP: 0,
+    typical: 1,
+    tfs: 1,
+    repetitionPenalty: 1.1,
+    repetitionPenaltyRange: 0,
+    repetitionPenaltySlope: 1,
+    samplerOrder: [6, 0, 1, 3, 4, 2, 5] as number[],
+    koboldMemory: "",
+    koboldBannedPhrases: [] as string[],
+    koboldUseDefaultBadwords: true
   },
   defaultSystemPrompt: "You are an immersive RP assistant. Keep continuity and character consistency. Stay in character at all times.",
   contextWindowSize: 8192,

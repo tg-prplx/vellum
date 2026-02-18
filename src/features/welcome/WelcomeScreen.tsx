@@ -53,7 +53,8 @@ export function WelcomeScreen({ initialSettings, onComplete, onPreviewLocale }: 
           baseUrl: selectedPreset.baseUrl,
           apiKey: providerApiKey.trim() || (selectedPreset.localOnly ? "local-key" : ""),
           proxyUrl: null,
-          fullLocalOnly: selectedPreset.localOnly
+          fullLocalOnly: selectedPreset.localOnly,
+          providerType: selectedPreset.providerType
         });
         providerPatch.activeProviderId = selectedPreset.defaultId;
         providerPatch.activeModel = null;

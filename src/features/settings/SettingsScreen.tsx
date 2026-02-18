@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../../shared/api";
 import { useI18n } from "../../shared/i18n";
 import { PROVIDER_PRESETS, type ProviderPreset } from "../../shared/providerPresets";
-import type { AppSettings, PromptTemplates, ProviderModel, ProviderProfile, SamplerConfig } from "../../shared/types/contracts";
+import type { AppSettings, McpDiscoveredTool, McpServerConfig, McpServerTestResult, PromptTemplates, ProviderModel, ProviderProfile, SamplerConfig } from "../../shared/types/contracts";
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{children}</h2>;
@@ -34,6 +34,12 @@ function StatusMessage({ text, variant = "info" }: { text: string; variant?: "in
   return <div className={`rounded-lg border px-3 py-2 text-xs ${styles[variant]}`}>{text}</div>;
 }
 
+function scrollToSettingsSection(id: string) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 export function SettingsScreen() {
   const { t } = useI18n();
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -57,13 +63,25 @@ export function SettingsScreen() {
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerProxyUrl, setProviderProxyUrl] = useState("");
   const [providerLocalOnly, setProviderLocalOnly] = useState(selectedPreset.localOnly);
+  const [providerType, setProviderType] = useState<"openai" | "koboldcpp">(selectedPreset.providerType);
 
   const [activeTab, setActiveTab] = useState<"basic" | "advanced" | "prompts">("basic");
+  const [mcpServersDraft, setMcpServersDraft] = useState<McpServerConfig[]>([]);
+  const [mcpDirty, setMcpDirty] = useState(false);
+  const [testingMcpId, setTestingMcpId] = useState<string | null>(null);
+  const [mcpTestResults, setMcpTestResults] = useState<Record<string, McpServerTestResult | undefined>>({});
+  const [mcpImportSource, setMcpImportSource] = useState("");
+  const [mcpImportLoading, setMcpImportLoading] = useState(false);
+  const [mcpDiscoveredTools, setMcpDiscoveredTools] = useState<McpDiscoveredTool[]>([]);
+  const [mcpDiscoveryLoading, setMcpDiscoveryLoading] = useState(false);
 
   useEffect(() => {
     void (async () => {
       const s = await api.settingsGet();
       setSettings(s);
+      setMcpServersDraft(Array.isArray(s.mcpServers) ? s.mcpServers : []);
+      setMcpDiscoveredTools(Array.isArray(s.mcpDiscoveredTools) ? s.mcpDiscoveredTools : []);
+      setMcpDirty(false);
       const p = await api.providerList();
       setProviders(p);
       if (s.activeProviderId) setSelectedProviderId(s.activeProviderId);
@@ -83,6 +101,7 @@ export function SettingsScreen() {
     setProviderBaseUrl(preset.baseUrl);
     setProviderProxyUrl("");
     setProviderLocalOnly(preset.localOnly);
+    setProviderType(preset.providerType);
     showResult(`Preset applied: ${preset.label}`, "info");
   }
 
@@ -113,7 +132,10 @@ export function SettingsScreen() {
     }
     const saved = await api.providerUpsert({
       id: providerId.trim(), name: providerName.trim(), baseUrl: providerBaseUrl.trim(),
-      apiKey: providerApiKey.trim() || "local-key", proxyUrl: providerProxyUrl.trim() || null, fullLocalOnly: providerLocalOnly
+      apiKey: providerApiKey.trim() || "local-key",
+      proxyUrl: providerProxyUrl.trim() || null,
+      fullLocalOnly: providerLocalOnly,
+      providerType
     });
     showResult(`Saved: ${saved.name}`, "success");
     await refreshProviders();
@@ -124,7 +146,10 @@ export function SettingsScreen() {
     applyPresetToForm(selectedPreset);
     await api.providerUpsert({
       id: selectedPreset.defaultId, name: selectedPreset.defaultName, baseUrl: selectedPreset.baseUrl,
-      apiKey: providerApiKey.trim() || (selectedPreset.localOnly ? "local-key" : ""), proxyUrl: null, fullLocalOnly: selectedPreset.localOnly
+      apiKey: providerApiKey.trim() || (selectedPreset.localOnly ? "local-key" : ""),
+      proxyUrl: null,
+      fullLocalOnly: selectedPreset.localOnly,
+      providerType: selectedPreset.providerType
     });
     await refreshProviders();
     setSelectedProviderId(selectedPreset.defaultId);
@@ -170,7 +195,134 @@ export function SettingsScreen() {
     await patch({ samplerConfig: newSampler });
   }
 
-  function changeInterfaceLanguage(lang: "en" | "ru") {
+  function readToolStates(): Record<string, boolean> {
+    const raw = settings?.mcpToolStates;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof value === "boolean") out[key] = value;
+    }
+    return out;
+  }
+
+  async function discoverMcpFunctions() {
+    setMcpDiscoveryLoading(true);
+    try {
+      const discovered = await api.settingsDiscoverMcpTools();
+      const currentStates = readToolStates();
+      const mergedStates: Record<string, boolean> = { ...currentStates };
+      for (const tool of discovered.tools || []) {
+        if (!(tool.callName in mergedStates)) {
+          mergedStates[tool.callName] = true;
+        }
+      }
+      const updated = await api.settingsUpdate({
+        mcpDiscoveredTools: discovered.tools || [],
+        mcpToolStates: mergedStates
+      });
+      setSettings(updated);
+      setMcpDiscoveredTools(Array.isArray(updated.mcpDiscoveredTools) ? updated.mcpDiscoveredTools : []);
+      showResult(`${t("settings.mcpFunctionsLoaded")}: ${(discovered.tools || []).length}`, "success");
+    } catch (err) {
+      showResult(`${t("settings.mcpFunctionsLoadFail")}: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setMcpDiscoveryLoading(false);
+    }
+  }
+
+  async function setToolEnabled(callName: string, enabled: boolean) {
+    try {
+      const states = readToolStates();
+      const updated = await api.settingsUpdate({
+        mcpToolStates: { ...states, [callName]: enabled }
+      });
+      setSettings(updated);
+    } catch (err) {
+      showResult(`${t("settings.mcpFunctionsLoadFail")}: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  }
+
+  function addMcpServer() {
+    const id = `mcp-${Date.now()}`;
+    setMcpServersDraft((prev) => [
+      ...prev,
+      {
+        id,
+        name: `MCP ${prev.length + 1}`,
+        command: "",
+        args: "",
+        env: "",
+        enabled: true,
+        timeoutMs: 15000
+      }
+    ]);
+    setMcpDirty(true);
+  }
+
+  function updateMcpServer(id: string, patchData: Partial<McpServerConfig>) {
+    setMcpServersDraft((prev) => prev.map((server) => (server.id === id ? { ...server, ...patchData } : server)));
+    setMcpDirty(true);
+  }
+
+  function removeMcpServer(id: string) {
+    setMcpServersDraft((prev) => prev.filter((server) => server.id !== id));
+    setMcpTestResults((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setMcpDirty(true);
+  }
+
+  async function saveMcpServers() {
+    await patch({ mcpServers: mcpServersDraft });
+    setMcpDirty(false);
+    showResult(t("settings.mcpSaved"), "success");
+    await discoverMcpFunctions();
+  }
+
+  async function importMcpServers() {
+    const source = mcpImportSource.trim();
+    if (!source) {
+      showResult(t("settings.mcpImportEmpty"), "error");
+      return;
+    }
+    setMcpImportLoading(true);
+    try {
+      const result = await api.settingsImportMcpSource(source);
+      const incoming = result.servers || [];
+      setMcpServersDraft((prev) => {
+        const byId = new Map(prev.map((server) => [server.id, server]));
+        for (const server of incoming) {
+          byId.set(server.id, server);
+        }
+        return Array.from(byId.values());
+      });
+      setMcpDirty(true);
+      showResult(`${t("settings.mcpImportSuccess")}: ${incoming.length}`, "success");
+    } catch (err) {
+      showResult(`${t("settings.mcpImportFail")}: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setMcpImportLoading(false);
+    }
+  }
+
+  async function testMcpServer(server: McpServerConfig, resultKey: string) {
+    setTestingMcpId(resultKey);
+    try {
+      const result = await api.settingsTestMcpServer(server);
+      setMcpTestResults((prev) => ({ ...prev, [resultKey]: result }));
+    } catch (err) {
+      setMcpTestResults((prev) => ({
+        ...prev,
+        [resultKey]: { ok: false, tools: [], error: err instanceof Error ? err.message : String(err) }
+      }));
+    } finally {
+      setTestingMcpId(null);
+    }
+  }
+
+  function changeInterfaceLanguage(lang: "en" | "ru" | "zh" | "ja") {
     patch({ interfaceLanguage: lang });
     window.dispatchEvent(new CustomEvent("locale-change", { detail: lang }));
   }
@@ -196,27 +348,112 @@ export function SettingsScreen() {
       .catch(() => setCompressModels([]));
   }, [settings?.compressProviderId]);
 
+  useEffect(() => {
+    if (!settings) return;
+    setMcpServersDraft(Array.isArray(settings.mcpServers) ? settings.mcpServers : []);
+    setMcpDiscoveredTools(Array.isArray(settings.mcpDiscoveredTools) ? settings.mcpDiscoveredTools : []);
+    setMcpDirty(false);
+    setMcpTestResults({});
+  }, [settings?.mcpServers, settings?.mcpDiscoveredTools]);
+
+  const toolStates = useMemo(() => {
+    const raw = settings?.mcpToolStates;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {} as Record<string, boolean>;
+    const out: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof value === "boolean") out[key] = value;
+    }
+    return out;
+  }, [settings?.mcpToolStates]);
+
+  const discoveredToolsByServer = useMemo(() => {
+    const groups = new Map<string, McpDiscoveredTool[]>();
+    for (const tool of mcpDiscoveredTools) {
+      const key = tool.serverId || "unknown";
+      const list = groups.get(key) || [];
+      list.push(tool);
+      groups.set(key, list);
+    }
+    return Array.from(groups.entries()).map(([serverId, tools]) => ({
+      serverId,
+      serverName: tools[0]?.serverName || serverId,
+      tools: [...tools].sort((a, b) => a.toolName.localeCompare(b.toolName))
+    }));
+  }, [mcpDiscoveredTools]);
+
+  const tabMeta: Array<{ id: "basic" | "advanced" | "prompts"; label: string; desc: string }> = [
+    { id: "basic", label: t("settings.basic"), desc: t("settings.tabBasicDesc") },
+    { id: "advanced", label: t("settings.advanced"), desc: t("settings.tabAdvancedDesc") },
+    { id: "prompts", label: t("settings.prompts"), desc: t("settings.tabPromptsDesc") }
+  ];
+
+  const quickSections = useMemo(() => {
+    if (activeTab === "basic") {
+      return [
+        { id: "settings-general", label: t("settings.general") },
+        { id: "settings-quick-presets", label: t("settings.quickPresets") },
+        { id: "settings-manual-provider", label: t("settings.manualConfig") },
+        { id: "settings-active-model", label: t("settings.activeModel") },
+        { id: "settings-compress-model", label: t("settings.compressModel") }
+      ];
+    }
+    if (activeTab === "advanced") {
+      return [
+        { id: "settings-sampler-defaults", label: t("settings.samplerDefaults") },
+        { id: "settings-default-system-advanced", label: t("settings.defaultSysPrompt") },
+        { id: "settings-context-window", label: t("settings.contextWindow") },
+        { id: "settings-tools-mcp", label: t("settings.tools") },
+        { id: "settings-danger-zone", label: t("settings.dangerZone") }
+      ];
+    }
+    return [
+      { id: "settings-prompt-templates", label: t("settings.promptTemplates") },
+      { id: "settings-default-system-prompts", label: t("settings.defaultSysPrompt") }
+    ];
+  }, [activeTab, t]);
+
   if (!settings) {
     return <div className="flex h-full items-center justify-center"><div className="text-sm text-text-tertiary">Loading settings...</div></div>;
   }
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mb-4 flex gap-1 rounded-lg border border-border bg-bg-secondary p-1">
-        {(["basic", "advanced", "prompts"] as const).map((tab) => (
-          <button key={tab} onClick={() => setActiveTab(tab)}
-            className={`settings-tab flex-1 rounded-md px-4 py-2 text-xs font-semibold transition-colors ${
-              activeTab === tab ? "is-active bg-accent text-text-inverse" : "text-text-secondary hover:bg-bg-hover"
-            }`}>
-            {t(`settings.${tab}` as keyof typeof import("../../shared/i18n").translations.en)}
+      <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+        {tabMeta.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`settings-tab rounded-lg border px-4 py-3 text-left transition-colors ${
+              activeTab === tab.id
+                ? "is-active border-accent-border bg-accent-subtle text-text-primary"
+                : "border-border bg-bg-secondary text-text-secondary hover:bg-bg-hover"
+            }`}
+          >
+            <div className="text-xs font-semibold uppercase tracking-[0.08em]">{tab.label}</div>
+            <div className="mt-1 text-[11px] text-text-tertiary">{tab.desc}</div>
           </button>
         ))}
+      </div>
+
+      <div className="mb-4 rounded-lg border border-border bg-bg-secondary p-3">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{t("settings.quickJump")}</div>
+        <div className="flex flex-wrap gap-1.5">
+          {quickSections.map((section) => (
+            <button
+              key={section.id}
+              onClick={() => scrollToSettingsSection(section.id)}
+              className="rounded-md border border-border-subtle bg-bg-primary px-2.5 py-1 text-[11px] text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+            >
+              {section.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div key={activeTab} className="settings-content">
       {activeTab === "prompts" ? (
         <div className="space-y-4">
-          <div className="rounded-xl border border-border bg-bg-secondary p-5">
+          <div id="settings-prompt-templates" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
             <SectionTitle>{t("settings.promptTemplates")}</SectionTitle>
             <p className="mb-4 text-[11px] text-text-tertiary">{t("settings.promptTemplatesDesc")}</p>
             <div className="space-y-4">
@@ -243,7 +480,7 @@ export function SettingsScreen() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-bg-secondary p-5">
+          <div id="settings-default-system-prompts" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
             <SectionTitle>{t("settings.defaultSysPrompt")}</SectionTitle>
             <p className="mb-2 text-[10px] text-text-tertiary">{t("settings.baseSysPromptDesc")}</p>
             <textarea value={settings.defaultSystemPrompt} onChange={(e) => patch({ defaultSystemPrompt: e.target.value })}
@@ -252,7 +489,7 @@ export function SettingsScreen() {
         </div>
       ) : activeTab === "basic" ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <div className="rounded-xl border border-border bg-bg-secondary p-5">
+          <div id="settings-general" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
             <SectionTitle>{t("settings.general")}</SectionTitle>
             <div className="space-y-4">
               <div>
@@ -275,9 +512,11 @@ export function SettingsScreen() {
 
               <div>
                 <FieldLabel>{t("settings.interfaceLanguage")}</FieldLabel>
-                <SelectField value={settings.interfaceLanguage || "en"} onChange={(v) => changeInterfaceLanguage(v as "en" | "ru")}>
+                <SelectField value={settings.interfaceLanguage || "en"} onChange={(v) => changeInterfaceLanguage(v as "en" | "ru" | "zh" | "ja")}>
                   <option value="en">English</option>
                   <option value="ru">Русский</option>
+                  <option value="zh">简体中文</option>
+                  <option value="ja">日本語</option>
                 </SelectField>
               </div>
 
@@ -313,16 +552,11 @@ export function SettingsScreen() {
                 <input type="checkbox" checked={settings.mergeConsecutiveRoles ?? false}
                   onChange={(e) => patch({ mergeConsecutiveRoles: e.target.checked })} />
               </div>
-
-              <button onClick={reset}
-                className="w-full rounded-lg border border-danger-border px-3 py-2 text-sm font-medium text-danger hover:bg-danger-subtle">
-                {t("settings.resetDefaults")}
-              </button>
             </div>
           </div>
 
           <div className="space-y-4">
-            <div className="rounded-xl border border-border bg-bg-secondary p-5">
+            <div id="settings-quick-presets" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
               <SectionTitle>{t("settings.quickPresets")}</SectionTitle>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {PROVIDER_PRESETS.map((preset) => (
@@ -341,7 +575,7 @@ export function SettingsScreen() {
               </button>
             </div>
 
-            <div className="rounded-xl border border-border bg-bg-secondary p-5">
+            <div id="settings-manual-provider" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
               <SectionTitle>{t("settings.manualConfig")}</SectionTitle>
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
@@ -357,6 +591,13 @@ export function SettingsScreen() {
                 <div>
                   <FieldLabel>{t("settings.baseUrl")}</FieldLabel>
                   <InputField value={providerBaseUrl} onChange={setProviderBaseUrl} placeholder="https://api.example.com/v1" />
+                </div>
+                <div>
+                  <FieldLabel>Provider Type</FieldLabel>
+                  <SelectField value={providerType} onChange={(v) => setProviderType(v as "openai" | "koboldcpp")}>
+                    <option value="openai">OpenAI-compatible</option>
+                    <option value="koboldcpp">KoboldCpp (native)</option>
+                  </SelectField>
                 </div>
                 <div>
                   <FieldLabel>{t("settings.apiKey")}</FieldLabel>
@@ -378,7 +619,7 @@ export function SettingsScreen() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-border bg-bg-secondary p-5">
+            <div id="settings-active-model" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
               <SectionTitle>{t("settings.activeModel")}</SectionTitle>
               <div className="space-y-3">
                 <div>
@@ -404,7 +645,7 @@ export function SettingsScreen() {
             </div>
 
             {/* Compress Model Settings */}
-            <div className="rounded-xl border border-border bg-bg-secondary p-5">
+            <div id="settings-compress-model" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
               <SectionTitle>{t("settings.compressModel")}</SectionTitle>
               <p className="mb-3 text-[10px] text-text-tertiary">{t("settings.compressModelDesc")}</p>
               <div className="space-y-3">
@@ -432,7 +673,7 @@ export function SettingsScreen() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <div className="rounded-xl border border-border bg-bg-secondary p-5">
+          <div id="settings-sampler-defaults" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
             <SectionTitle>{t("settings.samplerDefaults")}</SectionTitle>
             <div className="space-y-4">
               {[
@@ -464,11 +705,71 @@ export function SettingsScreen() {
                   onChange={(v) => patchSampler({ stop: v.split(",").map((s) => s.trim()).filter(Boolean) })}
                   placeholder="e.g. <|end|>, ###" />
               </div>
+
+              <div className="rounded-lg border border-border-subtle bg-bg-primary p-3">
+                <div className="mb-2 text-xs font-semibold text-text-secondary">KoboldCpp</div>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { key: "topK" as const, label: "Top-K", min: 0, max: 300, step: 1, fallback: 100 },
+                    { key: "topA" as const, label: "Top-A", min: 0, max: 1, step: 0.01, fallback: 0 },
+                    { key: "minP" as const, label: "Min-P", min: 0, max: 1, step: 0.01, fallback: 0 },
+                    { key: "typical" as const, label: "Typical", min: 0, max: 1, step: 0.01, fallback: 1 },
+                    { key: "tfs" as const, label: "TFS", min: 0, max: 1, step: 0.01, fallback: 1 },
+                    { key: "repetitionPenalty" as const, label: "Repetition Penalty", min: 0, max: 2, step: 0.01, fallback: 1.1 }
+                  ].map(({ key, label, min, max, step, fallback }) => (
+                    <div key={key}>
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <FieldLabel>{label}</FieldLabel>
+                        <span className="text-xs text-text-tertiary">{Number(settings.samplerConfig[key] ?? fallback).toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={Number(settings.samplerConfig[key] ?? fallback)}
+                        onChange={(e) => patchSampler({ [key]: Number(e.target.value) })}
+                        className="w-full"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3">
+                  <FieldLabel>Default Kobold memory</FieldLabel>
+                  <textarea
+                    value={settings.samplerConfig.koboldMemory || ""}
+                    onChange={(e) => patchSampler({ koboldMemory: e.target.value })}
+                    className="h-20 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary"
+                    placeholder="Persistent memory/context for KoboldCpp chats"
+                  />
+                </div>
+                <div className="mt-3">
+                  <FieldLabel>Default phrase bans</FieldLabel>
+                  <InputField
+                    value={(settings.samplerConfig.koboldBannedPhrases || []).join(", ")}
+                    onChange={(v) => patchSampler({
+                      koboldBannedPhrases: v
+                        .split(",")
+                        .map((item) => item.trim())
+                        .filter(Boolean)
+                    })}
+                    placeholder="phrase one, phrase two"
+                  />
+                </div>
+                <div className="mt-3 flex items-center justify-between rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
+                  <span className="text-xs font-medium text-text-secondary">Use default badwords IDs</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.samplerConfig.koboldUseDefaultBadwords !== false}
+                    onChange={(e) => patchSampler({ koboldUseDefaultBadwords: e.target.checked })}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="space-y-4">
-            <div className="rounded-xl border border-border bg-bg-secondary p-5">
+            <div id="settings-default-system-advanced" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
               <SectionTitle>{t("settings.defaultSysPrompt")}</SectionTitle>
               <textarea value={settings.defaultSystemPrompt}
                 onChange={(e) => patch({ defaultSystemPrompt: e.target.value })}
@@ -477,7 +778,7 @@ export function SettingsScreen() {
               <p className="mt-2 text-[10px] text-text-tertiary">{t("settings.defaultSysPromptDesc")}</p>
             </div>
 
-            <div className="rounded-xl border border-border bg-bg-secondary p-5">
+            <div id="settings-context-window" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
               <SectionTitle>{t("settings.contextWindow")}</SectionTitle>
               <div className="space-y-3">
                 <div>
@@ -518,10 +819,279 @@ export function SettingsScreen() {
               </div>
             </div>
 
-            <button onClick={reset}
-              className="w-full rounded-lg border border-danger-border px-3 py-2 text-sm font-medium text-danger hover:bg-danger-subtle">
-              {t("settings.resetAll")}
-            </button>
+            <div id="settings-tools-mcp" className="scroll-mt-24 rounded-xl border border-border bg-bg-secondary p-5">
+              <SectionTitle>{t("settings.tools")}</SectionTitle>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between rounded-lg border border-border-subtle bg-bg-primary px-3 py-2.5">
+                  <div>
+                    <div className="text-sm font-medium text-text-primary">{t("settings.toolCallingEnabled")}</div>
+                    <div className="mt-0.5 text-[11px] text-text-tertiary">{t("settings.toolCallingDesc")}</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.toolCallingEnabled ?? false}
+                    onChange={(e) => patch({ toolCallingEnabled: e.target.checked })}
+                  />
+                </div>
+
+                <div>
+                  <FieldLabel>{t("settings.toolCallingPolicy")}</FieldLabel>
+                  <SelectField
+                    value={settings.toolCallingPolicy ?? "balanced"}
+                    onChange={(v) => patch({ toolCallingPolicy: v as AppSettings["toolCallingPolicy"] })}
+                  >
+                    <option value="conservative">{t("settings.toolPolicyConservative")}</option>
+                    <option value="balanced">{t("settings.toolPolicyBalanced")}</option>
+                    <option value="aggressive">{t("settings.toolPolicyAggressive")}</option>
+                  </SelectField>
+                  <p className="mt-1 text-[10px] text-text-tertiary">{t("settings.toolCallingPolicyDesc")}</p>
+                </div>
+
+                <div>
+                  <FieldLabel>{t("settings.maxToolCalls")}</FieldLabel>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={settings.maxToolCallsPerTurn ?? 4}
+                    onChange={(e) => {
+                      const raw = Number(e.target.value);
+                      const next = Number.isFinite(raw) ? Math.max(1, Math.min(12, Math.floor(raw))) : 4;
+                      patch({ maxToolCallsPerTurn: next });
+                    }}
+                    className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-border-subtle bg-bg-primary px-3 py-2.5">
+                  <div>
+                    <div className="text-sm font-medium text-text-primary">{t("settings.mcpAutoAttachTools")}</div>
+                    <div className="mt-0.5 text-[11px] text-text-tertiary">{t("settings.mcpAutoAttachToolsDesc")}</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.mcpAutoAttachTools ?? true}
+                    onChange={(e) => patch({ mcpAutoAttachTools: e.target.checked })}
+                  />
+                </div>
+
+                <div className="rounded-lg border border-border-subtle bg-bg-primary p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-text-primary">{t("settings.mcpFunctions")}</div>
+                      <div className="text-[11px] text-text-tertiary">{t("settings.mcpFunctionsDesc")}</div>
+                    </div>
+                    <button
+                      onClick={() => void discoverMcpFunctions()}
+                      disabled={mcpDiscoveryLoading}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-60"
+                    >
+                      {mcpDiscoveryLoading ? t("settings.mcpLoadingFunctions") : t("settings.mcpLoadFunctions")}
+                    </button>
+                  </div>
+
+                  {discoveredToolsByServer.length === 0 ? (
+                    <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-tertiary">
+                      {t("settings.mcpNoFunctions")}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {discoveredToolsByServer.map((group) => (
+                        <div key={group.serverId} className="rounded-lg border border-border-subtle bg-bg-secondary p-2">
+                          <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-text-tertiary">
+                            {group.serverName}
+                          </div>
+                          <div className="space-y-1.5">
+                            {group.tools.map((tool) => {
+                              const enabled = toolStates[tool.callName] !== false;
+                              return (
+                                <label
+                                  key={tool.callName}
+                                  className="flex items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-primary px-2 py-1.5"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="truncate text-xs font-medium text-text-primary">{tool.toolName}</div>
+                                    <div className="truncate text-[10px] text-text-tertiary">{tool.callName}</div>
+                                  </div>
+                                  <input
+                                    type="checkbox"
+                                    checked={enabled}
+                                    onChange={(e) => {
+                                      void setToolEnabled(tool.callName, e.target.checked);
+                                    }}
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-border-subtle bg-bg-primary p-3">
+                  <div className="mb-2">
+                    <div className="text-sm font-medium text-text-primary">{t("settings.mcpServers")}</div>
+                    <div className="text-[11px] text-text-tertiary">{t("settings.mcpServersDesc")}</div>
+                  </div>
+
+                  <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary p-3">
+                    <FieldLabel>{t("settings.mcpImportSource")}</FieldLabel>
+                    <textarea
+                      value={mcpImportSource}
+                      onChange={(e) => setMcpImportSource(e.target.value)}
+                      className="h-20 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs leading-relaxed text-text-primary placeholder:text-text-tertiary"
+                      placeholder={t("settings.mcpImportPlaceholder")}
+                    />
+                    <button
+                      onClick={() => void importMcpServers()}
+                      disabled={mcpImportLoading}
+                      className="mt-2 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-60"
+                    >
+                      {mcpImportLoading ? t("settings.mcpImporting") : t("settings.mcpImport")}
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {mcpServersDraft.map((server, index) => {
+                      const rowKey = server.id || `mcp-row-${index}`;
+                      const testResult = mcpTestResults[rowKey];
+                      return (
+                      <div key={rowKey} className="rounded-lg border border-border-subtle bg-bg-secondary p-3">
+                        <div className="mb-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                          <div>
+                            <FieldLabel>{t("settings.mcpId")}</FieldLabel>
+                            <InputField value={server.id} onChange={(v) => updateMcpServer(server.id, { id: v })} />
+                          </div>
+                          <div>
+                            <FieldLabel>{t("settings.mcpName")}</FieldLabel>
+                            <InputField value={server.name} onChange={(v) => updateMcpServer(server.id, { name: v })} />
+                          </div>
+                        </div>
+
+                        <div className="mb-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                          <div>
+                            <FieldLabel>{t("settings.mcpCommand")}</FieldLabel>
+                            <InputField value={server.command} onChange={(v) => updateMcpServer(server.id, { command: v })} />
+                          </div>
+                          <div>
+                            <FieldLabel>{t("settings.mcpArgs")}</FieldLabel>
+                            <InputField value={server.args} onChange={(v) => updateMcpServer(server.id, { args: v })} />
+                          </div>
+                        </div>
+
+                        <div className="mb-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                          <div>
+                            <FieldLabel>{t("settings.mcpTimeout")}</FieldLabel>
+                            <input
+                              type="number"
+                              min={1000}
+                              max={120000}
+                              value={server.timeoutMs}
+                              onChange={(e) => {
+                                const raw = Number(e.target.value);
+                                const timeoutMs = Number.isFinite(raw) ? Math.max(1000, Math.min(120000, Math.floor(raw))) : 15000;
+                                updateMcpServer(server.id, { timeoutMs });
+                              }}
+                              className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                            />
+                          </div>
+                          <div className="flex items-end">
+                            <div className="flex w-full items-center justify-between rounded-lg border border-border-subtle bg-bg-primary px-3 py-2.5">
+                              <span className="text-xs font-medium text-text-secondary">{t("settings.mcpEnabled")}</span>
+                              <input
+                                type="checkbox"
+                                checked={server.enabled}
+                                onChange={(e) => updateMcpServer(server.id, { enabled: e.target.checked })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <FieldLabel>{t("settings.mcpEnv")}</FieldLabel>
+                          <textarea
+                            value={server.env || ""}
+                            onChange={(e) => updateMcpServer(server.id, { env: e.target.value })}
+                            className="h-20 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs leading-relaxed text-text-primary placeholder:text-text-tertiary"
+                          />
+                        </div>
+
+                        <button
+                          onClick={() => removeMcpServer(server.id)}
+                          className="mt-2 rounded-lg border border-danger-border px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger-subtle"
+                        >
+                          {t("settings.mcpRemove")}
+                        </button>
+
+                        <button
+                          onClick={() => void testMcpServer(server, rowKey)}
+                          disabled={testingMcpId === rowKey}
+                          className="mt-2 ml-2 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-60"
+                        >
+                          {testingMcpId === rowKey ? t("settings.mcpTesting") : t("settings.mcpTest")}
+                        </button>
+
+                        {testResult ? (
+                          <div className={`mt-2 rounded-lg border px-3 py-2 text-xs ${
+                            testResult.ok
+                              ? "border-success-border bg-success-subtle text-success"
+                              : "border-danger-border bg-danger-subtle text-danger"
+                          }`}>
+                            <div className="font-medium">
+                              {testResult.ok ? t("settings.mcpTestOk") : t("settings.mcpTestFail")}
+                            </div>
+                            {testResult.ok ? (
+                              <div className="mt-1">
+                                {t("settings.mcpToolsFound")}: {testResult.tools.length}
+                              </div>
+                            ) : (
+                              <div className="mt-1">{testResult.error || "Unknown error"}</div>
+                            )}
+                            {testResult.ok ? (
+                              <div className="mt-1 text-text-secondary">
+                                {testResult.tools.length > 0
+                                  ? testResult.tools.map((tool) => tool.name).join(", ")
+                                  : t("settings.mcpNoTools")}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      onClick={addMcpServer}
+                      className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-bg-hover"
+                    >
+                      {t("settings.mcpAdd")}
+                    </button>
+                    <button
+                      onClick={saveMcpServers}
+                      disabled={!mcpDirty}
+                      className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-text-inverse hover:bg-accent-hover disabled:opacity-60"
+                    >
+                      {t("settings.mcpSave")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="settings-danger-zone" className="scroll-mt-24 rounded-xl border border-danger-border bg-bg-secondary p-5">
+              <SectionTitle>{t("settings.dangerZone")}</SectionTitle>
+              <p className="mb-3 text-[10px] text-text-tertiary">{t("settings.dangerZoneDesc")}</p>
+              <button
+                onClick={reset}
+                className="w-full rounded-lg border border-danger-border px-3 py-2 text-sm font-medium text-danger hover:bg-danger-subtle"
+              >
+                {t("settings.resetAll")}
+              </button>
+            </div>
           </div>
         </div>
       )}
