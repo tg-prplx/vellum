@@ -74,6 +74,7 @@ export function buildKoboldGenerateBody(params: {
   const bannedStrings = parsePhraseBans(sc.koboldBannedPhrases);
   const samplerOrder = parseSamplerOrder(sc.samplerOrder);
   const useDefaultBadwords = sc.koboldUseDefaultBadwords !== false;
+  const nSigma = parseNumber(sc.nSigma, 0, 0, 1);
 
   return {
     prompt: params.prompt,
@@ -93,7 +94,8 @@ export function buildKoboldGenerateBody(params: {
     trim_stop: true,
     ...(stop.length > 0 ? { stop_sequence: stop } : {}),
     ...(bannedStrings.length > 0 ? { banned_strings: bannedStrings, banned_tokens: bannedStrings } : {}),
-    ...(samplerOrder.length > 0 ? { sampler_order: samplerOrder } : {})
+    ...(samplerOrder.length > 0 ? { sampler_order: samplerOrder } : {}),
+    ...(nSigma > 0 ? { n_sigma: nSigma, smoothing_factor: nSigma } : {})
   };
 }
 

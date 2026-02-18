@@ -374,6 +374,15 @@ function flattenContentToText(content: unknown): string {
   return parts.join("\n").trim();
 }
 
+const KOBOLD_TAGS = {
+  systemOpen: "{{[SYSTEM]}}",
+  systemClose: "{{[SYSTEM_END]}}",
+  inputOpen: "{{[INPUT]}}",
+  inputClose: "{{[INPUT_END]}}",
+  outputOpen: "{{[OUTPUT]}}",
+  outputClose: "{{[OUTPUT_END]}}"
+};
+
 function buildKoboldPromptFromMessages(
   messages: Array<{ role: string; content: unknown }>,
   samplerConfig: Record<string, unknown>
@@ -389,19 +398,23 @@ function buildKoboldPromptFromMessages(
       continue;
     }
     if (role === "assistant") {
-      convoParts.push(`Assistant: ${text}`);
+      convoParts.push(`${KOBOLD_TAGS.outputOpen}\n${text}\n${KOBOLD_TAGS.outputClose}`);
       continue;
     }
     if (role === "tool") {
-      convoParts.push(`Tool: ${text}`);
+      convoParts.push(`${KOBOLD_TAGS.inputOpen}\n[Tool]\n${text}\n${KOBOLD_TAGS.inputClose}`);
       continue;
     }
-    convoParts.push(`User: ${text}`);
+    convoParts.push(`${KOBOLD_TAGS.inputOpen}\n${text}\n${KOBOLD_TAGS.inputClose}`);
   }
 
   const customMemory = String(samplerConfig.koboldMemory || "").trim();
-  const memory = [customMemory, ...systemParts].filter(Boolean).join("\n\n");
-  const prompt = [...convoParts, "Assistant:"].join("\n\n");
+  const memoryBlocks = [
+    customMemory,
+    ...systemParts.map((part) => `${KOBOLD_TAGS.systemOpen}\n${part}\n${KOBOLD_TAGS.systemClose}`)
+  ].filter(Boolean);
+  const memory = memoryBlocks.join("\n\n");
+  const prompt = [...convoParts, KOBOLD_TAGS.outputOpen].join("\n\n");
   return { prompt, memory };
 }
 
@@ -854,9 +867,16 @@ async function completeProviderOnce(params: {
   const sc = params.samplerConfig || {};
 
   if (providerType === "koboldcpp") {
+    const customMemory = String(sc.koboldMemory || "").trim();
+    const memory = [
+      customMemory,
+      params.systemPrompt
+        ? `${KOBOLD_TAGS.systemOpen}\n${params.systemPrompt}\n${KOBOLD_TAGS.systemClose}`
+        : ""
+    ].filter(Boolean).join("\n\n");
     const body = buildKoboldGenerateBody({
-      prompt: `User: ${params.userPrompt}\n\nAssistant:`,
-      memory: params.systemPrompt,
+      prompt: `${KOBOLD_TAGS.inputOpen}\n${params.userPrompt}\n${KOBOLD_TAGS.inputClose}\n\n${KOBOLD_TAGS.outputOpen}`,
+      memory,
       samplerConfig: {
         ...sc,
         maxTokens: sc.maxTokens ?? 1024

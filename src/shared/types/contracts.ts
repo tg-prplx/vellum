@@ -28,6 +28,7 @@ export interface SamplerConfig {
   minP?: number;
   typical?: number;
   tfs?: number;
+  nSigma?: number;
   repetitionPenalty?: number;
   repetitionPenaltyRange?: number;
   repetitionPenaltySlope?: number;

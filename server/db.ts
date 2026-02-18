@@ -269,6 +269,7 @@ const DEFAULT_SETTINGS = {
     minP: 0,
     typical: 1,
     tfs: 1,
+    nSigma: 0,
     repetitionPenalty: 1.1,
     repetitionPenaltyRange: 0,
     repetitionPenaltySlope: 1,

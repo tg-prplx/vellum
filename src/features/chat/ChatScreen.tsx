@@ -189,6 +189,7 @@ export function ChatScreen() {
     temperature: 0.9, topP: 1.0, frequencyPenalty: 0.0,
     presencePenalty: 0.0, maxTokens: 2048, stop: [],
     topK: 100, topA: 0, minP: 0, typical: 1, tfs: 1,
+    nSigma: 0,
     repetitionPenalty: 1.1, repetitionPenaltyRange: 0, repetitionPenaltySlope: 1,
     samplerOrder: [6, 0, 1, 3, 4, 2, 5],
     koboldMemory: "",
@@ -1856,6 +1857,7 @@ export function ChatScreen() {
                         { key: "minP" as const, label: "Min-P", min: 0, max: 1, step: 0.01 },
                         { key: "typical" as const, label: "Typical", min: 0, max: 1, step: 0.01 },
                         { key: "tfs" as const, label: "TFS", min: 0, max: 1, step: 0.01 },
+                        { key: "nSigma" as const, label: "N-Sigma", min: 0, max: 1, step: 0.01 },
                         { key: "repetitionPenalty" as const, label: "Repetition Penalty", min: 0, max: 2, step: 0.01 }
                       ].map(({ key, label, min, max, step }) => (
                         <div key={key}>

@@ -6,6 +6,13 @@ import { runConsistency } from "../domain/writerEngine.js";
 import { buildKoboldGenerateBody, extractKoboldGeneratedText, normalizeProviderType, requestKoboldGenerate } from "../services/providerApi.js";
 
 const router = Router();
+const KOBOLD_TAGS = {
+  systemOpen: "{{[SYSTEM]}}",
+  systemClose: "{{[SYSTEM_END]}}",
+  inputOpen: "{{[INPUT]}}",
+  inputClose: "{{[INPUT_END]}}",
+  outputOpen: "{{[OUTPUT]}}"
+};
 
 interface ProviderRow {
   id: string;
@@ -174,9 +181,16 @@ async function callLlm(systemPrompt: string, userPrompt: string, sampler?: Write
   try {
     const providerType = normalizeProviderType(provider.provider_type);
     if (providerType === "koboldcpp") {
+      const customMemory = String(settings.samplerConfig.koboldMemory || "").trim();
+      const memory = [
+        customMemory,
+        systemPrompt
+          ? `${KOBOLD_TAGS.systemOpen}\n${systemPrompt}\n${KOBOLD_TAGS.systemClose}`
+          : ""
+      ].filter(Boolean).join("\n\n");
       const body = buildKoboldGenerateBody({
-        prompt: `User: ${userPrompt}\n\nAssistant:`,
-        memory: systemPrompt,
+        prompt: `${KOBOLD_TAGS.inputOpen}\n${userPrompt}\n${KOBOLD_TAGS.inputClose}\n\n${KOBOLD_TAGS.outputOpen}`,
+        memory,
         samplerConfig: {
           temperature: sampler?.temperature ?? settings.samplerConfig.temperature ?? 0.9,
           maxTokens: sampler?.maxTokens ?? settings.samplerConfig.maxTokens ?? 2048,
@@ -187,10 +201,12 @@ async function callLlm(systemPrompt: string, userPrompt: string, sampler?: Write
           minP: settings.samplerConfig.minP,
           typical: settings.samplerConfig.typical,
           tfs: settings.samplerConfig.tfs,
+          nSigma: settings.samplerConfig.nSigma,
           repetitionPenalty: settings.samplerConfig.repetitionPenalty,
           repetitionPenaltyRange: settings.samplerConfig.repetitionPenaltyRange,
           repetitionPenaltySlope: settings.samplerConfig.repetitionPenaltySlope,
           samplerOrder: settings.samplerConfig.samplerOrder,
+          koboldMemory: settings.samplerConfig.koboldMemory,
           koboldUseDefaultBadwords: settings.samplerConfig.koboldUseDefaultBadwords,
           koboldBannedPhrases: settings.samplerConfig.koboldBannedPhrases
         }

@@ -715,6 +715,7 @@ export function SettingsScreen() {
                     { key: "minP" as const, label: "Min-P", min: 0, max: 1, step: 0.01, fallback: 0 },
                     { key: "typical" as const, label: "Typical", min: 0, max: 1, step: 0.01, fallback: 1 },
                     { key: "tfs" as const, label: "TFS", min: 0, max: 1, step: 0.01, fallback: 1 },
+                    { key: "nSigma" as const, label: "N-Sigma", min: 0, max: 1, step: 0.01, fallback: 0 },
                     { key: "repetitionPenalty" as const, label: "Repetition Penalty", min: 0, max: 2, step: 0.01, fallback: 1.1 }
                   ].map(({ key, label, min, max, step, fallback }) => (
                     <div key={key}>
