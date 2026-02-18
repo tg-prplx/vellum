@@ -92,10 +92,11 @@ export function buildKoboldGenerateBody(params: {
     rep_pen_slope: parseNumber(sc.repetitionPenaltySlope, 1, 0, 10),
     use_default_badwordsids: useDefaultBadwords,
     trim_stop: true,
+    replace_instruct_placeholders: true,
     ...(stop.length > 0 ? { stop_sequence: stop } : {}),
     ...(bannedStrings.length > 0 ? { banned_strings: bannedStrings, banned_tokens: bannedStrings } : {}),
     ...(samplerOrder.length > 0 ? { sampler_order: samplerOrder } : {}),
-    ...(nSigma > 0 ? { n_sigma: nSigma, smoothing_factor: nSigma } : {})
+    ...(nSigma > 0 ? { nsigma: nSigma, n_sigma: nSigma, smoothing_factor: nSigma } : {})
   };
 }
 
