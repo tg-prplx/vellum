@@ -1,7 +1,7 @@
 # Vellum
 
 <p align="center">
-  <img src="build/icon.png" alt="Vellum icon" width="120" />
+  <img src="docs/vellum-icon.png" alt="Vellum icon" width="120" />
 </p>
 <p align="center"><strong>Vellum</strong></p>
 
