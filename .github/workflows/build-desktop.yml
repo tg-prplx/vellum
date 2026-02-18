@@ -11,16 +11,8 @@ permissions:
 
 jobs:
   macos:
-    name: macOS ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: macos-13
-          - arch: arm64
-            runner: macos-14
+    name: macOS (arm64 + x64)
+    runs-on: macos-14
 
     steps:
       - name: Checkout
@@ -49,12 +41,13 @@ jobs:
         run: |
           npm run build:desktop
           npm run rebuild:native:electron
-          npx electron-builder --mac --${{ matrix.arch }} --publish never
+          npx electron-builder --mac --arm64 --publish never
+          npx electron-builder --mac --x64 --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
+          name: macos
           path: release/**/*
           if-no-files-found: error
 

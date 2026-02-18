@@ -5,42 +5,43 @@
 </p>
 <p align="center"><strong>Vellum</strong></p>
 
-Desktop AI/RP chat-приложение на Electron с локальным Express API и SQLite.
+Desktop AI/RP chat app built with Electron, a local Express API, and SQLite.
 
-## Важно
-- Для разработки используйте `npm run dev`.
-- Для desktop-артефактов используйте `npm run dist:mac` и `npm run dist:win`.
-- Сборки в CI сейчас создаются без code signing (unsigned), поэтому на целевых ОС может потребоваться ручное подтверждение запуска.
+## Important
+- Use `npm run dev` for daily development.
+- Use `npm run dist:mac` / `npm run dist:win` for desktop bundles.
+- CI desktop builds are currently unsigned, so target OSes may require manual confirmation.
+- Desktop packaging works, but still has rough edges. Expect occasional startup/build quirks.
 
-## Текущий стек
+## Stack
 - Electron
 - React + TypeScript + Vite
 - Express
 - better-sqlite3
 - Tailwind CSS
 
-## Что уже есть
-- Чат с ветками, редактированием, удалением, регенерацией, автодиалогом персонажей.
-- RP-инструменты: prompt blocks, author note, scene state, пресеты.
-- Персоны пользователя (user persona) и передача в генерацию.
-- Characters: импорт/валидация/редактирование карточек.
-- Writer mode: проекты, главы, сцены, consistency check, экспорт.
-- Десктоп-сборка под macOS/Windows через electron-builder.
+## Features
+- Chat with branching, edit/delete, regenerate, and multi-character auto turns.
+- RP tools: prompt blocks, author note, scene state, presets.
+- User personas included in generation context.
+- Character cards: import, validate, edit.
+- Creative Writing mode: projects, chapters, scenes, consistency check, export.
+- Desktop packaging for macOS and Windows via electron-builder.
 
-## Требования
-- Node.js и npm (желательно LTS; в проекте используется нативный модуль `better-sqlite3`).
-- Для генерации иконок: Python 3 + Pillow (`pip install pillow`).
+## Requirements
+- Node.js + npm (LTS recommended; project uses native module `better-sqlite3`).
+- Python 3 + Pillow for icon generation (`pip install pillow`).
 
-## Быстрый старт (web + local API)
-1. Установить зависимости:
+## Quick Start (web + local API)
+1. Install dependencies:
 ```bash
 npm install
 ```
-2. Запустить frontend + backend:
+2. Start frontend + backend:
 ```bash
 npm run dev
 ```
-3. Открыть:
+3. Open:
 `http://localhost:1420`
 
 ## One-click bootstrap scripts
@@ -53,101 +54,101 @@ npm run dev
 setup-and-run-dev.bat
 ```
 
-Что делают скрипты:
-- пытаются установить Node.js LTS автоматически (macOS: `nvm`/`brew`, Windows: `winget`);
-- выполняют `npm install`;
-- запускают `npm run dev`.
+What these scripts do:
+- try to install Node.js LTS automatically (macOS: `nvm`/`brew`, Windows: `winget`);
+- run `npm install`;
+- start `npm run dev`.
 
-## Запуск Electron в dev
+## Electron Dev Mode
 ```bash
 npm run dev:electron
 ```
 
-## Сборка приложения
-- Все платформы:
+## Build Desktop App
+- All platforms:
 ```bash
 npm run dist
 ```
-- Только macOS:
+- macOS only:
 ```bash
 npm run dist:mac
 ```
-- Только Windows:
+- Windows only:
 ```bash
 npm run dist:win
 ```
 
-Артефакты сборки попадают в `release/`.
+Build output is written to `release/`.
 
 ## GitHub Actions
-Настроен workflow:
+Workflow:
 - `.github/workflows/build-desktop.yml`
 
-Что делает:
-- macOS job (x64 + arm64): собирает `dmg` и `.app` (`dir` target);
-- Windows job (x64): собирает `.exe` (NSIS installer);
-- загружает все артефакты из `release/` в Actions artifacts.
+What it does:
+- Builds macOS (`x64` + `arm64`) and Windows (`x64`) desktop bundles.
+- Uploads build outputs as Actions artifacts.
+- On tag push `v*`, publishes binaries into GitHub Releases automatically.
 
-## Иконки приложения
-Генерация иконок:
+## App Icons
+Generate icons:
 ```bash
 npm run build:icons
 ```
 
-Скрипт создает:
+The script creates:
 - `build/icon.png`
 - `build/icon.icns`
 - `build/icon.ico`
 
-Именно эти файлы используются `electron-builder` в `package.json`.
+These files are used by `electron-builder` in `package.json`.
 
-## Полезные скрипты
+## Useful Scripts
 - `npm run dev` - frontend + server.
-- `npm run dev:server` - только backend (`tsx watch server/index.ts`).
-- `npm run dev:frontend` - только Vite frontend.
+- `npm run dev:server` - backend only (`tsx watch server/index.ts`).
+- `npm run dev:frontend` - Vite frontend only.
 - `npm run dev:electron` - Electron + frontend + server.
-- `npm run rebuild:native` - ручной rebuild `better-sqlite3`.
-- `npm run test` - запуск тестов (`vitest run`).
+- `npm run rebuild:native` - manual `better-sqlite3` rebuild.
+- `npm run test` - run tests (`vitest run`).
 
-## Где хранятся данные
-- В dev: локально в `data/`.
-- В packaged app: `SLV_DATA_DIR` автоматически переводится в `app.getPath("userData")/data`.
+## Data Storage
+- In dev: local `data/`.
+- In packaged app: `SLV_DATA_DIR` is mapped to `app.getPath("userData")/data`.
 
 ## Troubleshooting
 ### 1) `ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION ...` (better-sqlite3)
-Причина: модуль собран под другую версию Node ABI.
+Cause: native module was built for a different Node ABI.
 
-Что делать:
-1. Запустить:
+Fix:
+1. Run:
 ```bash
 npm run rebuild:native
 ```
-2. Если не помогло: удалить `node_modules` и `package-lock.json`, затем `npm install`.
-3. Убедиться, что dev и сборка запускаются одной и той же версией Node.
+2. If needed, remove `node_modules` and `package-lock.json`, then run `npm install`.
+3. Ensure dev/build use the same Node version.
 
-Примечание: перед `dev:server` автоматически выполняется `scripts/ensure-better-sqlite3.cjs`.
+Note: `scripts/ensure-better-sqlite3.cjs` runs automatically before `dev:server`.
 
 ### 2) `EADDRINUSE: address already in use :::3001`
-Причина: порт 3001 уже занят старым процессом сервера.
+Cause: port `3001` is occupied by an old server process.
 
-Что делать:
-1. Просто перезапустить `npm run dev` (скрипт `ensure-dev-port.cjs` пытается освободить порт автоматически).
-2. Если процесс не снялся:
+Fix:
+1. Restart `npm run dev` (`ensure-dev-port.cjs` tries to free the port).
+2. If still occupied:
 ```bash
 lsof -nP -iTCP:3001 -sTCP:LISTEN
 kill -TERM <pid>
 ```
 
-### 3) После сборки долго грузится и показывается пустое окно
-Проверь:
-1. Что запускалась полная сборка (`npm run dist`), а не только frontend.
-2. Что в сборку попали `dist/`, `dist-electron/` и `server-bundle.mjs`.
-3. Логи Electron main-процесса: в production окно ждет `GET /api/health` от серверного бандла.
+### 3) Long startup or blank window after packaging
+Check:
+1. You ran full desktop build (`npm run dist`), not just frontend build.
+2. Package includes `dist/`, `dist-electron/`, and `server-bundle.mjs`.
+3. In production, Electron waits for `GET /api/health` from bundled server.
 
-## Структура проекта
+## Project Structure
 - `src/` - React frontend.
 - `server/` - Express API.
-- `electron/` - main/preload для Electron.
-- `scripts/` - сервисные скрипты (native rebuild, порт, иконки).
-- `build/` - build resources для electron-builder.
-- `release/` - итоговые `.app`, `.dmg`, `.exe` и установщики.
+- `electron/` - Electron main/preload.
+- `scripts/` - utility scripts (native rebuild, ports, icons).
+- `build/` - electron-builder resources.
+- `release/` - built `.app`, `.dmg`, `.exe`, installers.
