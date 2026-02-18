@@ -20,7 +20,23 @@ const DEFAULT_PORT = Number(process.env.SLV_SERVER_PORT || 3001);
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow same-origin/non-browser requests.
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    try {
+      const parsed = new URL(origin);
+      const isLocalHost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+      const isHttp = parsed.protocol === "http:" || parsed.protocol === "https:";
+      callback(null, isLocalHost && isHttp);
+    } catch {
+      callback(null, false);
+    }
+  }
+}));
 app.use(express.json({ limit: "50mb" }));
 
 // Use DATA_DIR for avatar/upload static paths (respects SLV_DATA_DIR env)

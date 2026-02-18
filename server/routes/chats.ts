@@ -731,6 +731,7 @@ async function streamProviderCompletion(params: {
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
+            if (trimmed.startsWith("event:")) continue;
             const data = trimmed.startsWith("data: ")
               ? trimmed.slice(6).trim()
               : trimmed;

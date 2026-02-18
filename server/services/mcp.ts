@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { basename } from "path";
 
 export interface McpServerConfig {
   id: string;
@@ -53,6 +54,25 @@ interface PrepareOptions {
 const HEADER_DELIMITER = Buffer.from("\r\n\r\n");
 const HEADER_DELIMITER_LF = Buffer.from("\n\n");
 const MCP_PROTOCOL_VERSION = "2024-11-05";
+const ALLOWED_MCP_COMMANDS = new Set([
+  "npx",
+  "node",
+  "bunx",
+  "uvx",
+  "python",
+  "python3",
+  "deno",
+  "cmd",
+  "powershell",
+  "pwsh"
+]);
+
+export function isAllowedMcpCommand(raw: unknown): boolean {
+  const command = String(raw || "").trim();
+  if (!command) return false;
+  const base = basename(command).toLowerCase().replace(/\.exe$/i, "");
+  return ALLOWED_MCP_COMMANDS.has(base);
+}
 
 function detectStdioWireFormat(config: McpServerConfig): "content-length" | "jsonl" {
   const signature = `${String(config.command || "")} ${String(config.args || "")}`.toLowerCase();
@@ -160,6 +180,9 @@ class McpStdioClient {
   private stderrTail = "";
 
   constructor(private readonly config: McpServerConfig) {
+    if (!isAllowedMcpCommand(config.command)) {
+      throw new Error(`MCP command is not allowed: ${config.command}`);
+    }
     this.wireFormat = detectStdioWireFormat(config);
     const args = parseArgs(config.args);
     const envPatch = parseEnv(config.env);
