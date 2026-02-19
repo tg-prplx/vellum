@@ -168,7 +168,10 @@ export function SettingsScreen() {
     try {
       const list = await api.providerFetchModels(selectedProviderId);
       setModels(list);
-      if (list[0]) setSelectedModelId((prev) => prev || list[0].id);
+      setSelectedModelId((prev) => {
+        if (list.length === 0) return "";
+        return list.some((model) => model.id === prev) ? prev : list[0].id;
+      });
       showResult(list.length ? `Loaded ${list.length} models` : "No models returned", list.length ? "success" : "info");
     } catch (error) { showResult(`Load models failed: ${String(error)}`, "error"); }
   }
@@ -329,15 +332,19 @@ export function SettingsScreen() {
 
   // Auto-load models when provider selection changes in settings
   useEffect(() => {
-    if (!selectedProviderId) { setModels([]); return; }
+    if (!selectedProviderId) { setModels([]); setSelectedModelId(""); return; }
     api.providerFetchModels(selectedProviderId)
       .then((list) => {
         setModels(list);
-        if (list.length > 0 && !list.find((m) => m.id === selectedModelId)) {
-          setSelectedModelId(list[0].id);
-        }
+        setSelectedModelId((prev) => {
+          if (list.length === 0) return "";
+          return list.some((m) => m.id === prev) ? prev : list[0].id;
+        });
       })
-      .catch(() => setModels([]));
+      .catch(() => {
+        setModels([]);
+        setSelectedModelId("");
+      });
   }, [selectedProviderId]);
 
   // Auto-load compress models when compress provider changes

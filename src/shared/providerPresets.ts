@@ -50,9 +50,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: "Native KoboldCpp API with memory + phrase banning",
     baseUrl: "http://localhost:5001",
     defaultId: "koboldcpp",
-    defaultName: "KoboldCpp (Local)",
+    defaultName: "KoboldCpp",
     apiKeyHint: "optional",
-    localOnly: true,
+    localOnly: false,
     providerType: "koboldcpp"
   },
   {

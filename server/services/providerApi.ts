@@ -212,7 +212,10 @@ export async function fetchKoboldModels(provider: ProviderLike): Promise<string[
   const base = normalizeKoboldBaseUrl(provider.base_url);
   const candidates = [
     `${base}/api/v1/models`,
+    `${base}/api/extra/models`,
     `${base}/api/v1/model`,
+    `${base}/api/extra/model`,
+    `${base}/api/v1/info/model`,
     `${base}/v1/models`,
     `${base}/models`
   ];
@@ -220,8 +223,16 @@ export async function fetchKoboldModels(provider: ProviderLike): Promise<string[
     try {
       const response = await fetch(url, { method: "GET" });
       if (!response.ok) continue;
-      const body = await response.json().catch(() => ({}));
-      const ids = parseModelIds(body);
+      const raw = await response.text();
+      let ids: string[] = [];
+      try {
+        ids = parseModelIds(JSON.parse(raw));
+      } catch {
+        const text = raw.trim();
+        if (text && !text.startsWith("<")) {
+          ids = [text];
+        }
+      }
       if (ids.length > 0) return ids;
     } catch {
       // Try next endpoint.

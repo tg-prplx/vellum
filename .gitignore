@@ -15,3 +15,7 @@ server-bundle.mjs
 release/
 src-tauri/target/
 src-tauri/gen/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/uploads/

@@ -222,6 +222,21 @@ for (const sql of migrations) {
   try { db.exec(sql); } catch { /* column already exists */ }
 }
 
+// KoboldCpp remote endpoints should not be blocked by legacy preset defaults.
+try {
+  const rows = db.prepare(
+    "SELECT id, base_url, full_local_only FROM providers WHERE provider_type = 'koboldcpp'"
+  ).all() as Array<{ id: string; base_url: string; full_local_only: number }>;
+  const update = db.prepare("UPDATE providers SET full_local_only = 0 WHERE id = ?");
+  for (const row of rows) {
+    if (row.full_local_only && !isLocalhostUrl(String(row.base_url || ""))) {
+      update.run(row.id);
+    }
+  }
+} catch {
+  // Ignore if providers table is unavailable during first boot.
+}
+
 // Backfill sort_order for existing messages that have sort_order = 0
 try {
   const needsBackfill = db.prepare(

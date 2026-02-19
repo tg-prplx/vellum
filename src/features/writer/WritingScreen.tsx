@@ -104,17 +104,22 @@ export function WritingScreen() {
   useEffect(() => {
     if (!writerProviderId) {
       setModels([]);
+      setWriterModelId("");
       return;
     }
     setLoadingModels(true);
     api.providerFetchModels(writerProviderId)
       .then((list) => {
         setModels(list);
-        if (list.length > 0 && !list.find((m) => m.id === writerModelId)) {
-          setWriterModelId(list[0].id);
-        }
+        setWriterModelId((prev) => {
+          if (list.length === 0) return "";
+          return list.some((m) => m.id === prev) ? prev : list[0].id;
+        });
       })
-      .catch(() => setModels([]))
+      .catch(() => {
+        setModels([]);
+        setWriterModelId("");
+      })
       .finally(() => setLoadingModels(false));
   }, [writerProviderId]);
 

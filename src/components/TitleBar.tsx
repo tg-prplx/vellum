@@ -23,7 +23,7 @@ export function TitleBar({ children }: TitleBarProps) {
 
   return (
     <div
-      className="flex h-11 flex-shrink-0 items-center border-b border-border bg-bg-primary"
+      className="flex h-12 flex-shrink-0 items-center border-b border-border bg-bg-primary"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       {/* macOS: spacer for native traffic lights */}
@@ -38,12 +38,12 @@ export function TitleBar({ children }: TitleBarProps) {
       {/* Windows/Linux: custom window controls */}
       {isWindows && (
         <div
-          className="flex flex-shrink-0"
+          className="flex h-full flex-shrink-0 items-center"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <button
             onClick={() => window.electronAPI!.minimize()}
-            className="flex h-11 w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
+            className="flex h-full w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
             title="Minimize"
           >
             <svg className="h-3 w-3" viewBox="0 0 12 12" fill="currentColor">
@@ -52,7 +52,7 @@ export function TitleBar({ children }: TitleBarProps) {
           </button>
           <button
             onClick={() => window.electronAPI!.maximize()}
-            className="flex h-11 w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
+            className="flex h-full w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
             title={isMaximized ? "Restore" : "Maximize"}
           >
             {isMaximized ? (
@@ -68,7 +68,7 @@ export function TitleBar({ children }: TitleBarProps) {
           </button>
           <button
             onClick={() => window.electronAPI!.close()}
-            className="flex h-11 w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-[#e81123] hover:text-white"
+            className="flex h-full w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-[#e81123] hover:text-white"
             title="Close"
           >
             <svg className="h-3 w-3" viewBox="0 0 12 12" fill="currentColor">

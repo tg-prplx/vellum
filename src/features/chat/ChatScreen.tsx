@@ -237,7 +237,7 @@ export function ChatScreen() {
   const sceneStateInitializedRef = useRef(false);
 
   // Collapsible sections in left sidebar
-  const [presetsCollapsed, setPresetsCollapsed] = useState(false);
+  const [presetsCollapsed, setPresetsCollapsed] = useState(true);
 
   // Inspector collapse
   const [inspectorSection, setInspectorSection] = useState<Record<string, boolean>>({
@@ -302,10 +302,15 @@ export function ChatScreen() {
       if (list[0]) setActiveChat(list[0]);
     });
     api.settingsGet().then((settings) => {
-      if (settings.activeProviderId && settings.activeModel) {
-        setActiveModelLabel(`${settings.activeModel}`);
+      if (settings.activeProviderId) {
         setChatProviderId(settings.activeProviderId);
+      }
+      if (settings.activeModel) {
+        setActiveModelLabel(`${settings.activeModel}`);
         setChatModelId(settings.activeModel);
+      } else {
+        setActiveModelLabel("");
+        setChatModelId("");
       }
       if (settings.samplerConfig) setSamplerConfig(settings.samplerConfig);
     });
@@ -321,16 +326,20 @@ export function ChatScreen() {
 
   // Auto-load models when provider changes
   useEffect(() => {
-    if (!chatProviderId) { setModels([]); return; }
+    if (!chatProviderId) { setModels([]); setChatModelId(""); return; }
     setLoadingModels(true);
     api.providerFetchModels(chatProviderId)
       .then((list) => {
         setModels(list);
-        if (list.length > 0 && !list.find((m) => m.id === chatModelId)) {
-          setChatModelId(list[0].id);
-        }
+        setChatModelId((prev) => {
+          if (list.length === 0) return "";
+          return list.some((m) => m.id === prev) ? prev : list[0].id;
+        });
       })
-      .catch(() => setModels([]))
+      .catch(() => {
+        setModels([]);
+        setChatModelId("");
+      })
       .finally(() => setLoadingModels(false));
   }, [chatProviderId]);
 
@@ -767,7 +776,9 @@ export function ChatScreen() {
     if (!chatProviderId || !chatModelId) return;
     try {
       const updated = await api.providerSetActive(chatProviderId, chatModelId);
-      setActiveModelLabel(chatModelId);
+      setActiveModelLabel(updated.activeModel || "");
+      if (updated.activeProviderId) setChatProviderId(updated.activeProviderId);
+      if (updated.activeModel) setChatModelId(updated.activeModel);
       setShowModelSelector(false);
       if (updated.samplerConfig) setSamplerConfig(updated.samplerConfig);
     } catch (error) {

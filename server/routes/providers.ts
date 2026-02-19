@@ -62,11 +62,11 @@ router.get("/:id/models", async (req, res) => {
 
   const settings = getSettings();
   if (settings.fullLocalMode && !isLocalhostUrl(row.base_url)) {
-    res.json([]);
+    res.status(403).json({ error: "Provider blocked by Full Local Mode" });
     return;
   }
   if (row.full_local_only && !isLocalhostUrl(row.base_url)) {
-    res.json([]);
+    res.status(403).json({ error: "Provider is set to Local-only. Disable Local-only for external URLs." });
     return;
   }
 
@@ -74,8 +74,7 @@ router.get("/:id/models", async (req, res) => {
     const providerType = normalizeProviderType(row.provider_type);
     if (providerType === "koboldcpp") {
       const koboldModels = await fetchKoboldModels(row);
-      const models = koboldModels.length > 0 ? koboldModels : ["koboldcpp"];
-      res.json(models.map((id) => ({ id })));
+      res.json(koboldModels.map((id) => ({ id })));
       return;
     }
 

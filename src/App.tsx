@@ -59,7 +59,7 @@ function AppContent() {
 
   const tabsNode = (
     <nav
-      className="app-nav my-1.5 flex items-center gap-1 rounded-lg bg-bg-secondary p-1"
+      className="app-nav my-1.5 flex items-center gap-1 rounded-lg border border-border-subtle bg-bg-secondary p-1"
       style={noDrag}
     >
       {tabs.map((tab) => (
@@ -83,7 +83,7 @@ function AppContent() {
     <div className="app-shell flex h-screen w-screen flex-col overflow-hidden bg-bg-primary">
       {isElectron ? (
         <TitleBar>
-          <div className="mx-auto flex w-full max-w-[1600px] items-center px-5 py-1">
+          <div className="mx-auto flex w-full max-w-[1600px] items-center px-7 py-1.5">
             <div className="grid w-full grid-cols-[1fr_auto_1fr] items-center gap-3">
               <div className="justify-self-start" style={noDrag}>
                 {brandNode}
@@ -99,7 +99,7 @@ function AppContent() {
         </TitleBar>
       ) : (
         <header className="flex-shrink-0 border-b border-border">
-          <div className="mx-auto flex w-full max-w-[1600px] items-center px-5 py-2.5">
+          <div className="mx-auto flex w-full max-w-[1600px] items-center px-7 py-4">
             <div className="grid w-full grid-cols-[1fr_auto_1fr] items-center gap-3">
               <div className="justify-self-start">{brandNode}</div>
               <div className="justify-self-center">{tabsNode}</div>
