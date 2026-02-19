@@ -115,7 +115,7 @@ export function SettingsScreen() {
     setProviderProxyUrl("");
     setProviderLocalOnly(preset.localOnly);
     setProviderType(preset.providerType);
-    showResult(`Preset applied: ${preset.label}`, "info");
+    showResult(`${t("settings.presetApplied")}: ${preset.label}`, "info");
   }
 
   async function patch(next: Partial<AppSettings>) {
@@ -130,7 +130,7 @@ export function SettingsScreen() {
     const defaults = await api.settingsReset();
     setSettings(defaults);
     window.dispatchEvent(new CustomEvent("onboarding-reset", { detail: defaults }));
-    showResult("Settings reset to defaults", "success");
+    showResult(t("settings.settingsResetDone"), "success");
   }
 
   async function refreshProviders() {
@@ -140,7 +140,7 @@ export function SettingsScreen() {
 
   async function saveProvider() {
     if (!providerId.trim() || !providerName.trim() || !providerBaseUrl.trim()) {
-      showResult("Fill Provider ID, Name, and Base URL", "error");
+      showResult(t("settings.fillProviderRequired"), "error");
       return;
     }
     const saved = await api.providerUpsert({
@@ -150,7 +150,7 @@ export function SettingsScreen() {
       fullLocalOnly: providerLocalOnly,
       providerType
     });
-    showResult(`Saved: ${saved.name}`, "success");
+    showResult(`${t("settings.providerSaved")}: ${saved.name}`, "success");
     await refreshProviders();
     setSelectedProviderId(saved.id);
   }
@@ -166,18 +166,18 @@ export function SettingsScreen() {
     });
     await refreshProviders();
     setSelectedProviderId(selectedPreset.defaultId);
-    showResult(`Preset provider added: ${selectedPreset.label}`, "success");
+    showResult(`${t("settings.presetProviderAdded")}: ${selectedPreset.label}`, "success");
   }
 
   async function testProvider() {
     const targetId = selectedProviderId || providerId;
-    if (!targetId) { showResult("Select or save a provider first", "error"); return; }
+    if (!targetId) { showResult(t("settings.selectOrSaveProviderFirst"), "error"); return; }
     const ok = await api.providerTestConnection(targetId);
-    showResult(ok ? "Connection check: OK" : "Provider blocked or invalid URL", ok ? "success" : "error");
+    showResult(ok ? t("settings.connectionCheckOk") : t("settings.providerBlockedOrInvalid"), ok ? "success" : "error");
   }
 
   async function loadModels() {
-    if (!selectedProviderId) { showResult("Select a provider first", "error"); return; }
+    if (!selectedProviderId) { showResult(t("settings.selectProviderFirst"), "error"); return; }
     try {
       const list = await api.providerFetchModels(selectedProviderId);
       setModels(list);
@@ -185,8 +185,11 @@ export function SettingsScreen() {
         if (list.length === 0) return "";
         return list.some((model) => model.id === prev) ? prev : list[0].id;
       });
-      showResult(list.length ? `Loaded ${list.length} models` : "No models returned", list.length ? "success" : "info");
-    } catch (error) { showResult(`Load models failed: ${String(error)}`, "error"); }
+      showResult(
+        list.length ? `${t("settings.modelsLoaded")}: ${list.length}` : t("settings.noModelsReturned"),
+        list.length ? "success" : "info"
+      );
+    } catch (error) { showResult(`${t("settings.loadModelsFailed")}: ${String(error)}`, "error"); }
   }
 
   async function loadCompressModels() {
@@ -199,10 +202,10 @@ export function SettingsScreen() {
   }
 
   async function applyActiveModel() {
-    if (!selectedProviderId || !selectedModelId) { showResult("Select provider and model first", "error"); return; }
+    if (!selectedProviderId || !selectedModelId) { showResult(t("settings.selectProviderAndModelFirst"), "error"); return; }
     const updated = await api.providerSetActive(selectedProviderId, selectedModelId);
     setSettings(updated);
-    showResult(`Active: ${selectedProviderId} / ${selectedModelId}`, "success");
+    showResult(`${t("settings.activeModelSet")}: ${selectedProviderId} / ${selectedModelId}`, "success");
   }
 
   async function patchSampler(samplerPatch: Partial<SamplerConfig>) {
@@ -457,7 +460,7 @@ export function SettingsScreen() {
   }, [activeTab, t]);
 
   if (!settings) {
-    return <div className="flex h-full items-center justify-center"><div className="text-sm text-text-tertiary">Loading settings...</div></div>;
+    return <div className="flex h-full items-center justify-center"><div className="text-sm text-text-tertiary">{t("settings.loading")}</div></div>;
   }
 
   return (
@@ -557,16 +560,21 @@ export function SettingsScreen() {
               <div>
                 <FieldLabel>{t("settings.interfaceLanguage")}</FieldLabel>
                 <SelectField value={settings.interfaceLanguage || "en"} onChange={(v) => changeInterfaceLanguage(v as "en" | "ru" | "zh" | "ja")}>
-                  <option value="en">English</option>
-                  <option value="ru">Русский</option>
-                  <option value="zh">简体中文</option>
-                  <option value="ja">日本語</option>
+                  <option value="en">{t("common.english")}</option>
+                  <option value="ru">{t("common.russian")}</option>
+                  <option value="zh">{t("common.chinese")}</option>
+                  <option value="ja">{t("common.japanese")}</option>
                 </SelectField>
               </div>
 
               <div>
                 <FieldLabel>{t("settings.responseLanguage")}</FieldLabel>
                 <InputField value={settings.responseLanguage} onChange={(v) => patch({ responseLanguage: v })} />
+              </div>
+
+              <div>
+                <FieldLabel>{t("settings.translateLanguage")}</FieldLabel>
+                <InputField value={settings.translateLanguage || settings.responseLanguage || "English"} onChange={(v) => patch({ translateLanguage: v })} />
               </div>
 
               <div className="flex items-center justify-between rounded-lg border border-border-subtle bg-bg-primary px-3 py-2.5">
@@ -625,22 +633,22 @@ export function SettingsScreen() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <FieldLabel>{t("settings.providerId")}</FieldLabel>
-                    <InputField value={providerId} onChange={setProviderId} placeholder="Provider ID" />
+                    <InputField value={providerId} onChange={setProviderId} placeholder={t("settings.providerIdPlaceholder")} />
                   </div>
                   <div>
                     <FieldLabel>{t("settings.providerName")}</FieldLabel>
-                    <InputField value={providerName} onChange={setProviderName} placeholder="Display Name" />
+                    <InputField value={providerName} onChange={setProviderName} placeholder={t("settings.providerNamePlaceholder")} />
                   </div>
                 </div>
                 <div>
                   <FieldLabel>{t("settings.baseUrl")}</FieldLabel>
-                  <InputField value={providerBaseUrl} onChange={setProviderBaseUrl} placeholder="https://api.example.com/v1" />
+                  <InputField value={providerBaseUrl} onChange={setProviderBaseUrl} placeholder={t("settings.baseUrlPlaceholder")} />
                 </div>
                 <div>
-                  <FieldLabel>Provider Type</FieldLabel>
+                  <FieldLabel>{t("settings.providerType")}</FieldLabel>
                   <SelectField value={providerType} onChange={(v) => setProviderType(v as "openai" | "koboldcpp")}>
-                    <option value="openai">OpenAI-compatible</option>
-                    <option value="koboldcpp">KoboldCpp (native)</option>
+                    <option value="openai">{t("settings.providerTypeOpenAi")}</option>
+                    <option value="koboldcpp">{t("settings.providerTypeKobold")}</option>
                   </SelectField>
                 </div>
                 <div>
@@ -649,7 +657,7 @@ export function SettingsScreen() {
                 </div>
                 <div>
                   <FieldLabel>{t("settings.proxyUrl")}</FieldLabel>
-                  <InputField value={providerProxyUrl} onChange={setProviderProxyUrl} placeholder="https://proxy.example.com" />
+                  <InputField value={providerProxyUrl} onChange={setProviderProxyUrl} placeholder={t("settings.proxyUrlPlaceholder")} />
                 </div>
                 <div className="flex items-center justify-between rounded-lg border border-border-subtle bg-bg-primary px-3 py-2.5">
                   <span className="text-xs font-medium text-text-secondary">{t("settings.localOnly")}</span>
@@ -747,11 +755,11 @@ export function SettingsScreen() {
                 <FieldLabel>{t("settings.stopSequences")}</FieldLabel>
                 <InputField value={(settings.samplerConfig.stop || []).join(", ")}
                   onChange={(v) => patchSampler({ stop: v.split(",").map((s) => s.trim()).filter(Boolean) })}
-                  placeholder="e.g. <|end|>, ###" />
+                  placeholder={t("settings.stopSequencesPlaceholder")} />
               </div>
 
               <div className="rounded-lg border border-border-subtle bg-bg-primary p-3">
-                <div className="mb-2 text-xs font-semibold text-text-secondary">KoboldCpp</div>
+                <div className="mb-2 text-xs font-semibold text-text-secondary">{t("settings.koboldSampler")}</div>
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     { key: "topK" as const, label: "Top-K", min: 0, max: 300, step: 1, fallback: 100 },
@@ -780,25 +788,25 @@ export function SettingsScreen() {
                   ))}
                 </div>
                 <div className="mt-3">
-                  <FieldLabel>Default Kobold memory</FieldLabel>
+                  <FieldLabel>{t("settings.koboldMemoryLabel")}</FieldLabel>
                   <textarea
                     value={settings.samplerConfig.koboldMemory || ""}
                     onChange={(e) => patchSampler({ koboldMemory: e.target.value })}
                     className="h-20 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary"
-                    placeholder="Persistent memory/context for KoboldCpp chats"
+                    placeholder={t("settings.koboldMemoryPlaceholder")}
                   />
                 </div>
                 <div className="mt-3">
-                  <FieldLabel>Default phrase bans</FieldLabel>
+                  <FieldLabel>{t("settings.koboldPhraseBansLabel")}</FieldLabel>
                   <InputField
                     value={koboldBansInput}
                     onChange={setKoboldBansInput}
                     onBlur={() => patchSampler({ koboldBannedPhrases: parsePhraseBansInput(koboldBansInput) })}
-                    placeholder="phrase one, phrase two"
+                    placeholder={t("settings.koboldPhraseBansPlaceholder")}
                   />
                 </div>
                 <div className="mt-3 flex items-center justify-between rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
-                  <span className="text-xs font-medium text-text-secondary">Use default badwords IDs</span>
+                  <span className="text-xs font-medium text-text-secondary">{t("settings.koboldUseDefaultBadwordsIds")}</span>
                   <input
                     type="checkbox"
                     checked={settings.samplerConfig.koboldUseDefaultBadwords === true}
@@ -815,7 +823,7 @@ export function SettingsScreen() {
               <textarea value={settings.defaultSystemPrompt}
                 onChange={(e) => patch({ defaultSystemPrompt: e.target.value })}
                 className="h-40 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs leading-relaxed text-text-primary placeholder:text-text-tertiary"
-                placeholder="Default system prompt for new chats..." />
+                placeholder={t("settings.defaultSystemPromptPlaceholder")} />
               <p className="mt-2 text-[10px] text-text-tertiary">{t("settings.defaultSysPromptDesc")}</p>
             </div>
 

@@ -85,8 +85,14 @@ router.delete("/:id", (req, res) => {
   }
 
   const deleteMessage = db.transaction(() => {
-    db.prepare("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_id = ? AND branch_id = ? AND deleted = 0")
-      .run(row.id, row.chat_id, row.branch_id);
+    // UI delete should be precise: remove only the selected message.
+    db.prepare(
+      "UPDATE messages SET deleted = 1 WHERE id = ? AND chat_id = ? AND branch_id = ? AND deleted = 0"
+    ).run(row.id, row.chat_id, row.branch_id);
+    // Also remove tool/reasoning records directly attached to this message.
+    db.prepare(
+      "UPDATE messages SET deleted = 1 WHERE parent_id = ? AND chat_id = ? AND branch_id = ? AND role = 'tool' AND deleted = 0"
+    ).run(row.id, row.chat_id, row.branch_id);
     normalizeSortOrder(row.chat_id, row.branch_id);
   });
   deleteMessage();

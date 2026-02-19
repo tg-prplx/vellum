@@ -266,6 +266,7 @@ const DEFAULT_SETTINGS = {
   censorshipMode: "Unfiltered",
   fullLocalMode: false,
   responseLanguage: "English",
+  translateLanguage: "English",
   interfaceLanguage: "en",
   activeProviderId: null,
   activeModel: null,

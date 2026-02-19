@@ -165,7 +165,7 @@ function getLorebookEntries(lorebookId: string | null): LoreBookEntryData[] {
   }
 }
 
-function getSceneState(chatId: string): { mood: string; pacing: string; variables: Record<string, string>; intensity: number } | null {
+function getSceneState(chatId: string): { mood: string; pacing: string; variables: Record<string, string>; intensity: number; pureChatMode: boolean } | null {
   const row = db.prepare("SELECT payload FROM rp_scene_state WHERE chat_id = ?").get(chatId) as { payload: string } | undefined;
   if (!row) return null;
   try {
@@ -175,7 +175,8 @@ function getSceneState(chatId: string): { mood: string; pacing: string; variable
       mood: parsed.mood || "neutral",
       pacing: parsed.pacing || "balanced",
       variables: parsed.variables || {},
-      intensity: Math.max(0, Math.min(1, intensity))
+      intensity: Math.max(0, Math.min(1, intensity)),
+      pureChatMode: parsed.pureChatMode === true
     };
   } catch { return null; }
 }
@@ -324,12 +325,14 @@ interface ToolCallTrace {
 }
 
 interface ToolCallStreamEvent {
-  phase: "start" | "done";
+  phase: "start" | "delta" | "done";
   callId: string;
   name: string;
   args: string;
   result?: string;
 }
+
+const REASONING_CALL_NAME = "__reasoning__";
 
 function clampToolIterationLimit(raw: unknown): number {
   const value = Number(raw);
@@ -372,6 +375,62 @@ function flattenContentToText(content: unknown): string {
     if (row.type === "image_url") parts.push("[Image attachment]");
   }
   return parts.join("\n").trim();
+}
+
+function flattenReasoningValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => flattenReasoningValue(item))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (!value || typeof value !== "object") return "";
+  const row = value as Record<string, unknown>;
+  if (typeof row.text === "string") return row.text;
+  if (typeof row.content === "string") return row.content;
+  if (typeof row.summary === "string") return row.summary;
+  const nested = [row.reasoning, row.reasoning_content, row.output_text];
+  return nested
+    .map((item) => flattenReasoningValue(item))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractOpenAIReasoningDelta(parsed: unknown): string {
+  if (!parsed || typeof parsed !== "object") return "";
+  const root = parsed as { choices?: Array<{ delta?: Record<string, unknown> }> };
+  const delta = root.choices?.[0]?.delta;
+  if (!delta || typeof delta !== "object") return "";
+
+  const direct = [
+    delta.reasoning,
+    delta.reasoning_content,
+    delta.reasoning_text,
+    delta.reasoningText
+  ]
+    .map((item) => flattenReasoningValue(item))
+    .find((item) => Boolean(item));
+  if (direct) return direct;
+
+  if (Array.isArray(delta.content)) {
+    const fromParts = delta.content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        const row = part as Record<string, unknown>;
+        const type = String(row.type || "");
+        if (!/reason/i.test(type)) return "";
+        return flattenReasoningValue(row);
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (fromParts) return fromParts;
+  }
+
+  return "";
 }
 
 const KOBOLD_TAGS = {
@@ -685,15 +744,25 @@ function serializeToolTrace(trace: ToolCallTrace): string {
 
 function deleteMessageTree(chatId: string, branchId: string, messageId: string) {
   db.prepare(`
-    WITH RECURSIVE descendants(id) AS (
-      SELECT id
+    WITH RECURSIVE descendants(id, created_at, sort_order) AS (
+      SELECT id, created_at, sort_order
       FROM messages
       WHERE id = ? AND chat_id = ? AND branch_id = ? AND deleted = 0
       UNION ALL
-      SELECT m.id
+      SELECT m.id, m.created_at, m.sort_order
       FROM messages m
       JOIN descendants d ON m.parent_id = d.id
       WHERE m.chat_id = ? AND m.branch_id = ? AND m.deleted = 0
+        AND (
+          m.created_at > d.created_at
+          OR (
+            m.created_at = d.created_at
+            AND (
+              m.sort_order > d.sort_order
+              OR (m.sort_order = d.sort_order AND m.id > d.id)
+            )
+          )
+        )
     )
     UPDATE messages
     SET deleted = 1
@@ -712,6 +781,55 @@ async function streamProviderCompletion(params: {
 }) {
   const providerType = normalizeProviderType(params.provider.provider_type);
   const sc = params.samplerConfig;
+  const reasoningTrace: ToolCallTrace = {
+    callId: `reasoning_${Date.now()}`,
+    name: REASONING_CALL_NAME,
+    args: "{}",
+    result: ""
+  };
+  let reasoningStarted = false;
+
+  const startReasoning = () => {
+    if (reasoningStarted) return;
+    reasoningStarted = true;
+    params.res.write(`data: ${JSON.stringify({
+      type: "tool",
+      chatId: params.chatId,
+      phase: "start",
+      callId: reasoningTrace.callId,
+      name: REASONING_CALL_NAME,
+      args: "{}"
+    })}\n\n`);
+  };
+
+  const appendReasoningDelta = (delta: string) => {
+    if (!delta) return;
+    startReasoning();
+    reasoningTrace.result += delta;
+    params.res.write(`data: ${JSON.stringify({
+      type: "tool",
+      chatId: params.chatId,
+      phase: "delta",
+      callId: reasoningTrace.callId,
+      name: REASONING_CALL_NAME,
+      result: delta.slice(0, 4000)
+    })}\n\n`);
+  };
+
+  const finalizeReasoning = (): ToolCallTrace[] => {
+    if (!reasoningStarted) return [];
+    params.res.write(`data: ${JSON.stringify({
+      type: "tool",
+      chatId: params.chatId,
+      phase: "done",
+      callId: reasoningTrace.callId,
+      name: REASONING_CALL_NAME,
+      result: reasoningTrace.result.slice(0, 12000)
+    })}\n\n`);
+    if (!reasoningTrace.result.trim()) return [];
+    return [reasoningTrace];
+  };
+
   if (providerType === "koboldcpp") {
     const { prompt, memory } = buildKoboldPromptFromMessages(params.messages, sc);
     const body = buildKoboldGenerateBody({
@@ -767,7 +885,7 @@ async function streamProviderCompletion(params: {
         }
       }
 
-      if (fullContent.trim()) return fullContent;
+      if (fullContent.trim()) return { content: fullContent, toolTraces: [] as ToolCallTrace[] };
     }
 
     const fallbackResponse = await requestKoboldGenerate(params.provider, body, params.signal);
@@ -780,7 +898,7 @@ async function streamProviderCompletion(params: {
     if (generated) {
       await sendSseText(params.res, params.chatId, generated, 8);
     }
-    return generated;
+    return { content: generated, toolTraces: [] as ToolCallTrace[] };
   }
 
   const baseUrl = String(params.provider.base_url || "").replace(/\/+$/, "");
@@ -836,6 +954,8 @@ async function streamProviderCompletion(params: {
 
         try {
           const parsed = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
+          const reasoningDelta = extractOpenAIReasoningDelta(parsed);
+          if (reasoningDelta) appendReasoningDelta(reasoningDelta);
           const delta = parsed.choices?.[0]?.delta?.content;
           if (delta) {
             fullContent += delta;
@@ -852,7 +972,7 @@ async function streamProviderCompletion(params: {
     }
   }
 
-  return fullContent;
+  return { content: fullContent, toolTraces: finalizeReasoning() };
 }
 
 async function completeProviderOnce(params: {
@@ -934,6 +1054,8 @@ async function streamLlmResponse(
   const sceneState = getSceneState(chatId);
   const authorNote = getAuthorNote(chatId);
   const samplerConfig = getChatSamplerConfig(chatId, settings.samplerConfig);
+  const pureChatMode = sceneState?.pureChatMode === true;
+  const systemBlockContent = String(blocks.find((block) => block.kind === "system")?.content || "").trim();
 
   // Resolve user persona name for {{user}} placeholder
   const resolvedUserName = (userPersona?.name || "").trim() || "User";
@@ -973,12 +1095,12 @@ async function streamLlmResponse(
     withoutSummaryPercent
   );
 
-  const lorebookEntries = getLorebookEntries(chat?.lorebook_id || null);
-  const loreBlockEnabled = blocks.some((block) => block.kind === "lore" && block.enabled);
+  const lorebookEntries = pureChatMode ? [] : getLorebookEntries(chat?.lorebook_id || null);
+  const loreBlockEnabled = !pureChatMode && blocks.some((block) => block.kind === "lore" && block.enabled);
   const triggeredLoreEntries = loreBlockEnabled
     ? getTriggeredLoreEntries(lorebookEntries, promptTimeline.map((item) => String(item.content || "")))
     : [];
-  const effectiveBlocks = triggeredLoreEntries.length > 0
+  const effectiveBlocks = !pureChatMode && triggeredLoreEntries.length > 0
     ? injectLoreBlocks(blocks, triggeredLoreEntries)
     : blocks;
   const promptTimelineForModel = promptTimeline.map((item) => ({
@@ -989,65 +1111,88 @@ async function streamLlmResponse(
   }));
 
   let systemPrompt: string;
-  if (characterCards.length > 1 && overrideCharacterName) {
-    systemPrompt = buildMultiCharSystemPrompt(
-      {
-        blocks: effectiveBlocks,
-        characterCard: currentCharCard,
-        sceneState,
-        authorNote,
+  let apiMessages;
+
+  if (pureChatMode) {
+    systemPrompt = systemBlockContent;
+    if (characterCards.length > 1 && overrideCharacterName) {
+      apiMessages = buildMultiCharMessageArray(
+        systemPrompt,
+        promptTimelineForModel,
+        overrideCharacterName,
+        "",
+        "",
+        resolvedUserName
+      );
+    } else {
+      apiMessages = buildMessageArray(
+        systemPrompt,
+        promptTimelineForModel,
+        "",
+        "",
+        currentCharCard?.name,
+        resolvedUserName
+      );
+    }
+  } else {
+    if (characterCards.length > 1 && overrideCharacterName) {
+      systemPrompt = buildMultiCharSystemPrompt(
+        {
+          blocks: effectiveBlocks,
+          characterCard: currentCharCard,
+          sceneState,
+          authorNote,
+          intensity: sceneState?.intensity ?? 0.5,
+          responseLanguage: settings.responseLanguage,
+          censorshipMode: settings.censorshipMode,
+          contextSummary: chat?.context_summary || "",
+          defaultSystemPrompt: settings.defaultSystemPrompt,
+          userName: resolvedUserName
+        },
+        characterCards,
+        overrideCharacterName
+      );
+      if (personaInstruction) {
+        systemPrompt += `\n\n[User Persona]\nName: ${resolvedUserName}\n${personaInstruction}`;
+      }
+      // Auto-conversation instruction — tell the bot there's no user, just act between characters
+      if (isAutoConvo) {
+        systemPrompt += "\n\n[IMPORTANT: This is an autonomous conversation between characters. There is NO human user participating. Do NOT wait for user input, do NOT address the user, do NOT ask questions to the user. Act naturally and continue the roleplay conversation with the other character(s). Advance the plot, respond to what the other character said, and keep the story flowing. Be proactive — take actions, express emotions, move the scene forward.]";
+      }
+    } else {
+      systemPrompt = buildSystemPrompt({
+        blocks: effectiveBlocks, characterCard: currentCharCard, sceneState, authorNote,
         intensity: sceneState?.intensity ?? 0.5,
         responseLanguage: settings.responseLanguage,
         censorshipMode: settings.censorshipMode,
         contextSummary: chat?.context_summary || "",
         defaultSystemPrompt: settings.defaultSystemPrompt,
         userName: resolvedUserName
-      },
-      characterCards,
-      overrideCharacterName
-    );
-    if (personaInstruction) {
-      systemPrompt += `\n\n[User Persona]\nName: ${resolvedUserName}\n${personaInstruction}`;
+      });
+      if (personaInstruction) {
+        systemPrompt += `\n\n[User Persona]\nName: ${resolvedUserName}\n${personaInstruction}`;
+      }
     }
-    // Auto-conversation instruction — tell the bot there's no user, just act between characters
-    if (isAutoConvo) {
-      systemPrompt += "\n\n[IMPORTANT: This is an autonomous conversation between characters. There is NO human user participating. Do NOT wait for user input, do NOT address the user, do NOT ask questions to the user. Act naturally and continue the roleplay conversation with the other character(s). Advance the plot, respond to what the other character said, and keep the story flowing. Be proactive — take actions, express emotions, move the scene forward.]";
-    }
-  } else {
-    systemPrompt = buildSystemPrompt({
-      blocks: effectiveBlocks, characterCard: currentCharCard, sceneState, authorNote,
-      intensity: sceneState?.intensity ?? 0.5,
-      responseLanguage: settings.responseLanguage,
-      censorshipMode: settings.censorshipMode,
-      contextSummary: chat?.context_summary || "",
-      defaultSystemPrompt: settings.defaultSystemPrompt,
-      userName: resolvedUserName
-    });
-    if (personaInstruction) {
-      systemPrompt += `\n\n[User Persona]\nName: ${resolvedUserName}\n${personaInstruction}`;
-    }
-  }
 
-  let apiMessages;
-
-  if (characterCards.length > 1 && overrideCharacterName) {
-    apiMessages = buildMultiCharMessageArray(
-      systemPrompt,
-      promptTimelineForModel,
-      overrideCharacterName,
-      authorNote,
-      contextSummary,
-      resolvedUserName
-    );
-  } else {
-    apiMessages = buildMessageArray(
-      systemPrompt,
-      promptTimelineForModel,
-      authorNote,
-      contextSummary,
-      currentCharCard?.name,
-      resolvedUserName
-    );
+    if (characterCards.length > 1 && overrideCharacterName) {
+      apiMessages = buildMultiCharMessageArray(
+        systemPrompt,
+        promptTimelineForModel,
+        overrideCharacterName,
+        authorNote,
+        contextSummary,
+        resolvedUserName
+      );
+    } else {
+      apiMessages = buildMessageArray(
+        systemPrompt,
+        promptTimelineForModel,
+        authorNote,
+        contextSummary,
+        currentCharCard?.name,
+        resolvedUserName
+      );
+    }
   }
 
   // Merge consecutive roles if enabled
@@ -1127,8 +1272,9 @@ async function streamLlmResponse(
       });
       if (toolResult) {
         let fullContent = toolResult.content || "";
+        let reasoningTraces: ToolCallTrace[] = [];
         if (Array.isArray(toolResult.streamMessages) && toolResult.streamMessages.length > 0) {
-          fullContent = await streamProviderCompletion({
+          const streamResult = await streamProviderCompletion({
             provider,
             modelId,
             messages: toolResult.streamMessages as Array<{ role: string; content: unknown }>,
@@ -1137,11 +1283,13 @@ async function streamLlmResponse(
             res,
             signal: abortController.signal
           });
+          fullContent = streamResult.content;
+          reasoningTraces = streamResult.toolTraces;
         } else if (fullContent) {
           await sendSseText(res, chatId, fullContent, 12);
         }
 
-        if (fullContent || toolResult.toolCalls.length > 0) {
+        if (fullContent || toolResult.toolCalls.length > 0 || reasoningTraces.length > 0) {
           const assistantId = newId();
           db.prepare(
             "INSERT INTO messages (id, chat_id, branch_id, role, content, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
@@ -1174,6 +1322,23 @@ async function streamLlmResponse(
               nextSortOrder(chatId, branchId)
             );
           }
+          for (const reasoningTrace of reasoningTraces) {
+            const toolText = serializeToolTrace(reasoningTrace);
+            db.prepare(
+              "INSERT INTO messages (id, chat_id, branch_id, role, content, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
+            ).run(
+              newId(),
+              chatId,
+              branchId,
+              "tool",
+              toolText,
+              roughTokenCount(toolText),
+              assistantId,
+              now(),
+              null,
+              nextSortOrder(chatId, branchId)
+            );
+          }
         }
         res.write(`data: ${JSON.stringify({ type: "done", chatId })}\n\n`);
         res.end();
@@ -1181,7 +1346,7 @@ async function streamLlmResponse(
       }
     }
 
-    const fullContent = await streamProviderCompletion({
+    const streamResult = await streamProviderCompletion({
       provider,
       modelId,
       messages: apiMessages,
@@ -1190,9 +1355,11 @@ async function streamLlmResponse(
       res,
       signal: abortController.signal
     });
+    const fullContent = streamResult.content;
+    const reasoningTraces = streamResult.toolTraces;
 
-    // Insert assistant message (even partial if interrupted)
-    if (fullContent) {
+    // Insert assistant message (even partial if interrupted). Keep reasoning traces attached.
+    if (fullContent || reasoningTraces.length > 0) {
       const assistantId = newId();
       db.prepare(
         "INSERT INTO messages (id, chat_id, branch_id, role, content, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
@@ -1208,6 +1375,23 @@ async function streamLlmResponse(
         overrideCharacterName || null,
         nextSortOrder(chatId, branchId)
       );
+      for (const reasoningTrace of reasoningTraces) {
+        const toolText = serializeToolTrace(reasoningTrace);
+        db.prepare(
+          "INSERT INTO messages (id, chat_id, branch_id, role, content, token_count, parent_id, deleted, created_at, character_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)"
+        ).run(
+          newId(),
+          chatId,
+          branchId,
+          "tool",
+          toolText,
+          roughTokenCount(toolText),
+          assistantId,
+          now(),
+          null,
+          nextSortOrder(chatId, branchId)
+        );
+      }
     }
 
     res.write(`data: ${JSON.stringify({ type: "done", chatId })}\n\n`);
@@ -1297,6 +1481,23 @@ router.get("/", (_req, res) => {
       createdAt: r.created_at
     };
   }));
+});
+
+// Rename chat
+router.patch("/:id", (req, res) => {
+  const chatId = req.params.id;
+  const title = String(req.body?.title || "").trim();
+  if (!title) {
+    res.status(400).json({ error: "title is required" });
+    return;
+  }
+  const existing = db.prepare("SELECT id FROM chats WHERE id = ?").get(chatId) as { id: string } | undefined;
+  if (!existing) {
+    res.status(404).json({ error: "Chat not found" });
+    return;
+  }
+  db.prepare("UPDATE chats SET title = ? WHERE id = ?").run(title.slice(0, 160), chatId);
+  res.json({ ok: true, title: title.slice(0, 160) });
 });
 
 // Delete chat
@@ -1590,7 +1791,7 @@ router.post("/messages/:id/translate", async (req, res: Response) => {
   const provider = db.prepare("SELECT * FROM providers WHERE id = ?").get(providerId) as ProviderRow | undefined;
   if (!provider) { res.json({ translation: message.content }); return; }
 
-  const lang = targetLanguage || settings.responseLanguage || "English";
+  const lang = targetLanguage || settings.translateLanguage || settings.responseLanguage || "English";
 
   try {
     const translation = await completeProviderOnce({

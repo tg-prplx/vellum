@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useI18n } from "../shared/i18n";
 
 interface TitleBarProps {
   children?: ReactNode;
 }
 
 export function TitleBar({ children }: TitleBarProps) {
+  const { t } = useI18n();
   const [platform, setPlatform] = useState<string>("");
   const [isMaximized, setIsMaximized] = useState(false);
   const isElectron = !!window.electronAPI;
@@ -44,7 +46,7 @@ export function TitleBar({ children }: TitleBarProps) {
           <button
             onClick={() => window.electronAPI!.minimize()}
             className="flex h-full w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-            title="Minimize"
+            title={t("titlebar.minimize")}
           >
             <svg className="h-3 w-3" viewBox="0 0 12 12" fill="currentColor">
               <rect y="5.5" width="12" height="1" />
@@ -53,7 +55,7 @@ export function TitleBar({ children }: TitleBarProps) {
           <button
             onClick={() => window.electronAPI!.maximize()}
             className="flex h-full w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-            title={isMaximized ? "Restore" : "Maximize"}
+            title={isMaximized ? t("titlebar.restore") : t("titlebar.maximize")}
           >
             {isMaximized ? (
               <svg className="h-2.5 w-2.5" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
@@ -69,7 +71,7 @@ export function TitleBar({ children }: TitleBarProps) {
           <button
             onClick={() => window.electronAPI!.close()}
             className="flex h-full w-[46px] items-center justify-center text-text-tertiary transition-colors hover:bg-[#e81123] hover:text-white"
-            title="Close"
+            title={t("titlebar.close")}
           >
             <svg className="h-3 w-3" viewBox="0 0 12 12" fill="currentColor">
               <path d="M1.05 0.343L0.343 1.05 4.293 5 0.343 8.95l0.707 0.707L5 5.707l3.95 3.95 0.707-0.707L5.707 5l3.95-3.95-0.707-0.707L5 4.293 1.05 0.343z" />

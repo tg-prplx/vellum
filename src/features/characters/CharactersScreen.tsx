@@ -38,6 +38,7 @@ export function CharactersScreen() {
 
   // Status
   const [saveStatus, setSaveStatus] = useState("");
+  const [saveStatusType, setSaveStatusType] = useState<"success" | "error" | null>(null);
 
   const loadCharacters = useCallback(async () => {
     setLoading(true);
@@ -127,6 +128,7 @@ export function CharactersScreen() {
   async function handleSave() {
     if (!selected) return;
     setSaveStatus("");
+    setSaveStatusType(null);
     try {
       const tagsArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
       const updated = await api.characterUpdate(selected.id, {
@@ -142,10 +144,15 @@ export function CharactersScreen() {
       });
       setSelected(updated);
       setCharacters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-      setSaveStatus("Saved!");
-      setTimeout(() => setSaveStatus(""), 2000);
+      setSaveStatus(t("chars.saved"));
+      setSaveStatusType("success");
+      setTimeout(() => {
+        setSaveStatus("");
+        setSaveStatusType(null);
+      }, 2000);
     } catch (error) {
-      setSaveStatus(`Error: ${String(error)}`);
+      setSaveStatus(`${t("chars.errorPrefix")}: ${String(error)}`);
+      setSaveStatusType("error");
     }
   }
 
@@ -160,7 +167,7 @@ export function CharactersScreen() {
     setImportError("");
     setImportSuccess("");
     if (!importJson.trim()) {
-      setImportError("Paste a chara_card_v2 JSON");
+      setImportError(t("chars.pasteJsonRequired"));
       return;
     }
     try {
@@ -168,7 +175,7 @@ export function CharactersScreen() {
       setCharacters((prev) => [result, ...prev]);
       setSelected(result);
       setImportJson("");
-      setImportSuccess(`Imported: ${result.name}`);
+      setImportSuccess(`${t("chars.imported")}: ${result.name}`);
       setTimeout(() => setImportSuccess(""), 3000);
     } catch (error) {
       setImportError(String(error));
@@ -185,7 +192,7 @@ export function CharactersScreen() {
       const result = await api.characterImportV2(text);
       setCharacters((prev) => [result, ...prev]);
       setSelected(result);
-      setImportSuccess(`Imported from file: ${result.name}`);
+      setImportSuccess(`${t("chars.importedFromFile")}: ${result.name}`);
       setTimeout(() => setImportSuccess(""), 3000);
     } catch (error) {
       setImportError(String(error));
@@ -201,7 +208,7 @@ export function CharactersScreen() {
         spec: "chara_card_v2",
         spec_version: "2.0",
         data: {
-          name: "New Character",
+          name: t("chars.newCharacterName"),
           description: "",
           personality: "",
           scenario: "",
@@ -215,7 +222,7 @@ export function CharactersScreen() {
       const result = await api.characterImportV2(blankCard);
       setCharacters((prev) => [result, ...prev]);
       setSelected(result);
-      setImportSuccess("Blank character created");
+      setImportSuccess(t("chars.blankCreated"));
       setTimeout(() => setImportSuccess(""), 3000);
     } catch (error) {
       setImportError(String(error));
@@ -256,15 +263,15 @@ export function CharactersScreen() {
       spec: "chara_card_v2",
       spec_version: "2.0",
       data: {
-        name: "Sample Character",
-        description: "A mysterious traveler with a hidden past.",
-        personality: "Witty, guarded, loyal",
-        scenario: "Meeting at a crossroads inn during a storm.",
-        first_mes: "*The stranger looks up from their drink, a faint smile on their lips.* \"You don't look like you belong here either.\"",
+        name: t("chars.sampleName"),
+        description: t("chars.sampleDescription"),
+        personality: t("chars.samplePersonality"),
+        scenario: t("chars.sampleScenario"),
+        first_mes: t("chars.sampleGreeting"),
         tags: ["fantasy", "mystery"],
         system_prompt: "",
         mes_example: "",
-        creator_notes: "Created as a sample character."
+        creator_notes: t("chars.sampleCreatorNotes")
       }
     }, null, 2));
     setImportError("");
@@ -290,24 +297,26 @@ export function CharactersScreen() {
         <>
           <PanelTitle
             action={
-              <span className="text-[11px] text-text-tertiary">{characters.length} chars</span>
+              <span className="text-[11px] text-text-tertiary">
+                {characters.length} {t("chars.countSuffix")}
+              </span>
             }
           >
-            Characters
+            {t("chars.characters")}
           </PanelTitle>
 
           {/* Import section */}
           <div className="float-card mb-3 space-y-2 rounded-lg border border-border-subtle bg-bg-primary p-3">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">Import</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.import")}</span>
               <button onClick={loadSample} className="text-[10px] text-accent hover:underline">
-                Load Sample
+                {t("chars.loadSample")}
               </button>
             </div>
             <textarea
               value={importJson}
               onChange={(e) => setImportJson(e.target.value)}
-              placeholder='{"spec": "chara_card_v2", ...}'
+              placeholder={t("chars.importJsonPlaceholder")}
               className="h-20 w-full rounded-md border border-border bg-bg-secondary p-2 font-mono text-[10px] text-text-primary placeholder:text-text-tertiary"
               spellCheck={false}
             />
@@ -316,12 +325,12 @@ export function CharactersScreen() {
                 onClick={handleImport}
                 className="flex-1 rounded-md bg-accent px-2 py-1.5 text-[11px] font-semibold text-text-inverse hover:bg-accent-hover"
               >
-                Import JSON
+                {t("chars.importJSON")}
               </button>
               <button
                 onClick={() => jsonFileRef.current?.click()}
                 className="rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-text-secondary hover:bg-bg-hover"
-                title="Import from .json file"
+                title={t("chars.importFromFile")}
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -330,7 +339,7 @@ export function CharactersScreen() {
               <button
                 onClick={handleCreateBlank}
                 className="rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-text-secondary hover:bg-bg-hover"
-                title="Create blank character"
+                title={t("chars.createBlank")}
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -349,9 +358,9 @@ export function CharactersScreen() {
           {/* Character list */}
           <div className="list-animate flex-1 space-y-1.5 overflow-y-auto">
             {loading ? (
-              <div className="py-8 text-center text-xs text-text-tertiary">Loading...</div>
+              <div className="py-8 text-center text-xs text-text-tertiary">{t("chars.loading")}</div>
             ) : characters.length === 0 ? (
-              <EmptyState title="No characters" description="Import a chara_card_v2 JSON above" />
+              <EmptyState title={t("chars.noChars")} description={t("chars.noCharsDesc")} />
             ) : (
               characters.map((char) => (
                 <button
@@ -408,79 +417,79 @@ export function CharactersScreen() {
                 <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" disabled={avatarUploading} />
               </label>
               <div className="flex-1">
-                <PanelTitle>Character Editor</PanelTitle>
+                <PanelTitle>{t("chars.editor")}</PanelTitle>
                 {saveStatus && (
-                  <span className={`text-[11px] ${saveStatus.startsWith("Error") ? "text-danger" : "text-success"}`}>{saveStatus}</span>
+                  <span className={`text-[11px] ${saveStatusType === "error" ? "text-danger" : "text-success"}`}>{saveStatus}</span>
                 )}
               </div>
               <div className="flex gap-1.5">
-                <button onClick={handleSave} className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-text-inverse hover:bg-accent-hover">Save</button>
-                <button onClick={handleDelete} className="rounded-md border border-danger-border px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger-subtle">Delete</button>
+                <button onClick={handleSave} className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-text-inverse hover:bg-accent-hover">{t("chat.save")}</button>
+                <button onClick={handleDelete} className="rounded-md border border-danger-border px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger-subtle">{t("chat.delete")}</button>
               </div>
             </div>
 
             {/* GUI editor fields */}
             <div className="flex-1 space-y-3 overflow-y-auto">
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Name</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.name")}</label>
                 <input value={name} onChange={(e) => { setName(e.target.value); setJsonSyncDirection("gui"); }}
                   className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Description</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.description")}</label>
                 <textarea value={description} onChange={(e) => { setDescription(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-24 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Personality</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.personality")}</label>
                 <textarea value={personality} onChange={(e) => { setPersonality(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-16 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Scenario</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.scenario")}</label>
                 <textarea value={scenario} onChange={(e) => { setScenario(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-16 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">First Message (Greeting)</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.firstMessage")}</label>
                 <textarea value={greeting} onChange={(e) => { setGreeting(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-20 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">System Prompt</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.systemPrompt")}</label>
                 <textarea value={systemPrompt} onChange={(e) => { setSystemPrompt(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-16 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Example Messages</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.exampleMessages")}</label>
                 <textarea value={mesExample} onChange={(e) => { setMesExample(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-16 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary"
-                  placeholder="<START>&#10;{{user}}: Hello&#10;{{char}}: *waves* Hi there!" />
+                  placeholder={t("chars.exampleMessagesPlaceholder")} />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Creator Notes</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.creatorNotes")}</label>
                 <textarea value={creatorNotes} onChange={(e) => { setCreatorNotes(e.target.value); setJsonSyncDirection("gui"); }}
                   className="h-14 w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary" />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Tags (comma-separated)</label>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.tags")}</label>
                 <input value={tags} onChange={(e) => { setTags(e.target.value); setJsonSyncDirection("gui"); }}
                   className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-xs text-text-primary"
-                  placeholder="fantasy, mystery, romance" />
+                  placeholder={t("chars.tagsPlaceholder")} />
               </div>
             </div>
           </div>
         ) : (
-          <EmptyState title="Select a character" description="Choose a character from the list or import a new one" />
+          <EmptyState title={t("chars.selectCharacter")} description={t("chars.selectCharacterDesc")} />
         )
       }
       right={
         <div className="flex h-full flex-col">
           <div className="mb-3 flex items-center justify-between">
-            <PanelTitle>Raw JSON</PanelTitle>
+            <PanelTitle>{t("chars.rawJson")}</PanelTitle>
             <div className="flex items-center gap-2">
-              {!jsonValid && rawJson !== "{}" && <Badge variant="danger">Invalid</Badge>}
-              {jsonValid && rawJson !== "{}" && <Badge variant="success">Valid</Badge>}
+              {!jsonValid && rawJson !== "{}" && <Badge variant="danger">{t("chars.invalid")}</Badge>}
+              {jsonValid && rawJson !== "{}" && <Badge variant="success">{t("chars.valid")}</Badge>}
             </div>
           </div>
 
@@ -488,24 +497,24 @@ export function CharactersScreen() {
             value={rawJson}
             onChange={(e) => { setRawJson(e.target.value); setJsonSyncDirection("json"); }}
             className="flex-1 rounded-lg border border-border bg-bg-primary p-3 font-mono text-[10px] leading-relaxed text-text-primary placeholder:text-text-tertiary"
-            placeholder='{"spec": "chara_card_v2", "spec_version": "2.0", "data": { ... }}'
+            placeholder={t("chars.rawJsonPlaceholder")}
             spellCheck={false}
           />
 
           <div className="mt-3 flex gap-2">
             <button onClick={applyJsonToGui} disabled={!jsonValid || !selected}
               className="flex-1 rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-40">
-              JSON → GUI
+              {t("chars.jsonToGui")}
             </button>
             <button onClick={() => setJsonSyncDirection("gui")} disabled={!selected}
               className="flex-1 rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-40">
-              GUI → JSON
+              {t("chars.guiToJson")}
             </button>
           </div>
 
           {selected && (
             <div className="float-card mt-3 rounded-lg border border-border-subtle bg-bg-primary p-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">Preview</div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">{t("chars.preview")}</div>
               <div className="flex items-center gap-2">
                 {selected.avatarUrl ? (
                   <img src={avatarSrc(selected.avatarUrl)!} alt="" className="h-8 w-8 rounded-full object-cover" />
@@ -515,7 +524,7 @@ export function CharactersScreen() {
                   </div>
                 )}
                 <div>
-                  <div className="text-sm font-medium text-text-primary">{name || "Unnamed"}</div>
+                  <div className="text-sm font-medium text-text-primary">{name || t("chars.unnamed")}</div>
                   {tags && (
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {tags.split(",").filter(Boolean).slice(0, 5).map((t) => (

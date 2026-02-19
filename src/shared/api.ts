@@ -21,6 +21,9 @@ import type {
   Scene,
   SamplerConfig,
   WriterChapterSettings,
+  WriterCharacterEditRequest,
+  WriterCharacterEditResponse,
+  WriterCharacterGenerateRequest,
   UserPersona
 } from "./types/contracts";
 
@@ -102,7 +105,7 @@ async function del<T>(path: string): Promise<T> {
 export type StreamCallbacks = {
   onDelta?: (delta: string) => void;
   onToolEvent?: (event: {
-    phase: "start" | "done";
+    phase: "start" | "delta" | "done";
     callId: string;
     name: string;
     args?: string;
@@ -166,7 +169,7 @@ async function streamPost(
           const parsed = JSON.parse(trimmed.slice(6)) as {
             type: string;
             delta?: string;
-            phase?: "start" | "done";
+            phase?: "start" | "delta" | "done";
             callId?: string;
             name?: string;
             args?: string;
@@ -224,6 +227,8 @@ export const api = {
   // --- Chats ---
   chatCreate: (title: string, characterId?: string, characterIds?: string[]) =>
     post<ChatSession>("/chats", { title, characterId, characterIds }),
+  chatRename: (chatId: string, title: string) =>
+    patchReq<{ ok: boolean; title: string }>(`/chats/${chatId}`, { title }),
   chatAbort: (chatId: string) => post<{ ok: boolean; interrupted: boolean }>(`/chats/${chatId}/abort`),
   chatDelete: (chatId: string) => del<{ ok: boolean }>(`/chats/${chatId}`),
   chatBranches: (chatId: string) => get<BranchNode[]>(`/chats/${chatId}/branches`),
@@ -346,6 +351,10 @@ export const api = {
     post<string>(`/writer/projects/${projectId}/export/docx`),
   writerSceneUpdate: (sceneId: string, data: Partial<Scene>) =>
     patchReq<Scene>(`/writer/scenes/${sceneId}`, data),
+  writerGenerateCharacter: (payload: WriterCharacterGenerateRequest) =>
+    post<CharacterDetail>("/writer/characters/generate", payload),
+  writerEditCharacter: (characterId: string, payload: WriterCharacterEditRequest) =>
+    post<WriterCharacterEditResponse>(`/writer/characters/${characterId}/edit`, payload),
 
   // --- User Personas ---
   personaList: () => get<UserPersona[]>("/personas"),

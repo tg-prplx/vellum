@@ -10,7 +10,9 @@ import type {
   ProviderModel,
   ProviderProfile,
   Scene,
-  WriterChapterSettings
+  WriterChapterSettings,
+  WriterCharacterAdvancedOptions,
+  WriterCharacterEditField
 } from "../../shared/types/contracts";
 
 const SEVERITY_STYLES: Record<string, { badge: "warning" | "danger" | "default"; border: string }> = {
@@ -29,6 +31,60 @@ const DEFAULT_CHAPTER_SETTINGS: WriterChapterSettings = {
   dialogue: 0.5
 };
 
+const DEFAULT_WRITER_CHARACTER_ADVANCED: WriterCharacterAdvancedOptions = {
+  name: "",
+  role: "",
+  personality: "",
+  scenario: "",
+  greetingStyle: "",
+  systemPrompt: "",
+  tags: "",
+  notes: ""
+};
+
+type WritingWorkspaceMode = "books" | "characters";
+
+interface CharacterEditDraft {
+  name: string;
+  description: string;
+  personality: string;
+  scenario: string;
+  greeting: string;
+  systemPrompt: string;
+  mesExample: string;
+  creatorNotes: string;
+  tagsText: string;
+}
+
+interface CharacterEditStatus {
+  tone: "success" | "error";
+  text: string;
+}
+
+const CHARACTER_AI_EDIT_FIELDS: WriterCharacterEditField[] = [
+  "name",
+  "description",
+  "personality",
+  "scenario",
+  "greeting",
+  "systemPrompt",
+  "mesExample",
+  "creatorNotes",
+  "tags"
+];
+
+const EMPTY_CHARACTER_EDIT_DRAFT: CharacterEditDraft = {
+  name: "",
+  description: "",
+  personality: "",
+  scenario: "",
+  greeting: "",
+  systemPrompt: "",
+  mesExample: "",
+  creatorNotes: "",
+  tagsText: ""
+};
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -36,7 +92,7 @@ function clamp01(value: number): number {
 // Background task tracking — persists across mounts
 interface BackgroundTask {
   id: string;
-  type: "generate" | "expand" | "rewrite" | "summarize" | "consistency";
+  type: "generate" | "expand" | "rewrite" | "summarize" | "consistency" | "character";
   label: string;
   startedAt: number;
   status: "running" | "done" | "error";
@@ -84,6 +140,19 @@ export function WritingScreen() {
   const [writerModelId, setWriterModelId] = useState("");
   const [activeModelLabel, setActiveModelLabel] = useState("");
   const [loadingModels, setLoadingModels] = useState(false);
+  const [characterPrompt, setCharacterPrompt] = useState("");
+  const [characterAdvancedMode, setCharacterAdvancedMode] = useState(false);
+  const [characterAdvanced, setCharacterAdvanced] = useState<WriterCharacterAdvancedOptions>({ ...DEFAULT_WRITER_CHARACTER_ADVANCED });
+  const [characterBusy, setCharacterBusy] = useState(false);
+  const [characterError, setCharacterError] = useState("");
+  const [workspaceMode, setWorkspaceMode] = useState<WritingWorkspaceMode>("books");
+  const [characterEditorId, setCharacterEditorId] = useState<string | null>(null);
+  const [characterEditDraft, setCharacterEditDraft] = useState<CharacterEditDraft>({ ...EMPTY_CHARACTER_EDIT_DRAFT });
+  const [characterEditBusy, setCharacterEditBusy] = useState(false);
+  const [characterEditStatus, setCharacterEditStatus] = useState<CharacterEditStatus | null>(null);
+  const [characterAiInstruction, setCharacterAiInstruction] = useState("");
+  const [characterAiFields, setCharacterAiFields] = useState<WriterCharacterEditField[]>([]);
+  const [characterAiBusy, setCharacterAiBusy] = useState(false);
   const chapterSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -143,7 +212,7 @@ export function WritingScreen() {
   async function createProject() {
     const defaultName = `${t("writing.defaultBookPrefix")} ${projects.length + 1}`;
     const name = newProjectName.trim() || defaultName;
-    const project = await api.writerProjectCreate(name, "New writing project", []);
+    const project = await api.writerProjectCreate(name, t("writing.defaultProjectDescription"), []);
     setProjects((prev) => [project, ...prev]);
     setActiveProject(project);
     setNewProjectName("");
@@ -164,9 +233,9 @@ export function WritingScreen() {
       setActiveProject(updated);
       setRenameDraft(updated.name || "");
       setProjects((prev) => prev.map((project) => (project.id === updated.id ? updated : project)));
-      log(`Book renamed: ${updated.name}`);
+      log(`${t("writing.logBookRenamed")}: ${updated.name}`);
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
     }
   }
 
@@ -183,7 +252,7 @@ export function WritingScreen() {
       }
       log(`${t("writing.modelSet")}: ${updated.activeModel || writerModelId}`);
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
     }
   }
 
@@ -199,26 +268,26 @@ export function WritingScreen() {
 
   async function createChapter() {
     if (!activeProject) return;
-    const chapter = await api.writerChapterCreate(activeProject.id, `Chapter ${chapters.length + 1}`);
+    const chapter = await api.writerChapterCreate(activeProject.id, `${t("writing.defaultChapterPrefix")} ${chapters.length + 1}`);
     setChapters((prev) => [...prev, chapter]);
     setSelectedChapterId(chapter.id);
     setChapterSettings(chapter.settings ?? { ...DEFAULT_CHAPTER_SETTINGS });
-    log(`Chapter created: ${chapter.title}`);
+    log(`${t("writing.logChapterCreated")}: ${chapter.title}`);
   }
 
   async function generateDraft() {
     if (!selectedChapterId || busy) return;
     setBusy(true);
-    const taskId = startBgTask("generate", `Generate: "${chapterPrompt.slice(0, 30)}..."`);
+    const taskId = startBgTask("generate", `${t("writing.taskGenerate")}: "${chapterPrompt.slice(0, 30)}..."`);
     log(t("writing.working"));
     try {
       const scene = await api.writerGenerateDraft(selectedChapterId, chapterPrompt);
       setScenes((prev) => [...prev, scene]);
       setSelectedSceneId(scene.id);
-      log(`Draft generated: ${scene.title}`);
+      log(`${t("writing.logDraftGenerated")}: ${scene.title}`);
       finishBgTask(taskId, "done", scene.title);
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
       finishBgTask(taskId, "error", String(err));
     }
     setBusy(false);
@@ -226,25 +295,25 @@ export function WritingScreen() {
 
   async function runConsistency() {
     if (!activeProject) return;
-    const taskId = startBgTask("consistency", "Consistency check");
+    const taskId = startBgTask("consistency", t("writing.taskConsistency"));
     const report = await api.writerConsistencyRun(activeProject.id);
     setIssues(report);
-    log(`Consistency: ${report.length} issues found`);
-    finishBgTask(taskId, "done", `${report.length} issues`);
+    log(`${t("writing.logConsistencyFound")}: ${report.length}`);
+    finishBgTask(taskId, "done", `${report.length} ${t("writing.issuesCount")}`);
   }
 
   async function expandScene() {
     if (!selectedSceneId || busy) return;
     setBusy(true);
-    const taskId = startBgTask("expand", "Expand scene");
+    const taskId = startBgTask("expand", t("writing.taskExpand"));
     log(t("writing.working"));
     try {
       const scene = await api.writerSceneExpand(selectedSceneId);
       setScenes((prev) => prev.map((s) => (s.id === scene.id ? scene : s)));
-      log("Scene expanded");
+      log(t("writing.logSceneExpanded"));
       finishBgTask(taskId, "done");
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
       finishBgTask(taskId, "error", String(err));
     }
     setBusy(false);
@@ -254,15 +323,15 @@ export function WritingScreen() {
     if (!selectedSceneId || busy) return;
     setBusy(true);
     const tone = (chapterSettings.tone || DEFAULT_CHAPTER_SETTINGS.tone).trim();
-    const taskId = startBgTask("rewrite", `Rewrite (${tone})`);
+    const taskId = startBgTask("rewrite", `${t("writing.taskRewrite")} (${tone})`);
     log(`${t("writing.rewrite")} (${tone})...`);
     try {
       const scene = await api.writerSceneRewrite(selectedSceneId);
       setScenes((prev) => prev.map((s) => (s.id === scene.id ? scene : s)));
-      log("Scene rewritten");
+      log(t("writing.logSceneRewritten"));
       finishBgTask(taskId, "done");
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
       finishBgTask(taskId, "error", String(err));
     }
     setBusy(false);
@@ -271,14 +340,14 @@ export function WritingScreen() {
   async function summarizeScene() {
     if (!selectedSceneId || busy) return;
     setBusy(true);
-    const taskId = startBgTask("summarize", "Summarize scene");
+    const taskId = startBgTask("summarize", t("writing.taskSummarize"));
     log(t("writing.working"));
     try {
       const summary = await api.writerSceneSummarize(selectedSceneId);
-      log(`Summary: ${summary}`);
+      log(`${t("writing.logSummary")}: ${summary}`);
       finishBgTask(taskId, "done", String(summary).slice(0, 100));
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
       finishBgTask(taskId, "error", String(err));
     }
     setBusy(false);
@@ -290,22 +359,22 @@ export function WritingScreen() {
       const updated = await api.writerSceneUpdate(selectedSceneId, { content: editingContent });
       setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
       setIsEditing(false);
-      log("Scene saved");
+      log(t("writing.logSceneSaved"));
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
     }
   }
 
   async function exportMarkdown() {
     if (!activeProject) return;
     const path = await api.writerExportMarkdown(activeProject.id);
-    log(`Markdown exported: ${path}`);
+    log(`${t("writing.logMarkdownExported")}: ${path}`);
   }
 
   async function exportDocx() {
     if (!activeProject) return;
     const path = await api.writerExportDocx(activeProject.id);
-    log(`DOCX exported: ${path}`);
+    log(`${t("writing.logDocxExported")}: ${path}`);
   }
 
   async function toggleProjectCharacter(characterId: string) {
@@ -318,9 +387,180 @@ export function WritingScreen() {
       const updated = await api.writerProjectSetCharacters(activeProject.id, nextIds);
       setActiveProject(updated);
       setProjects((prev) => prev.map((project) => (project.id === updated.id ? updated : project)));
-      log(`Creative Writing cast updated (${updated.characterIds.length} characters)`);
+      log(`${t("writing.logCastUpdated")} (${updated.characterIds.length} ${t("writing.charactersCountSuffix")})`);
     } catch (err) {
-      log(`Error: ${String(err)}`);
+      log(`${t("writing.logError")}: ${String(err)}`);
+    }
+  }
+
+  function updateCharacterAdvanced<K extends keyof WriterCharacterAdvancedOptions>(key: K, value: string) {
+    setCharacterAdvanced((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function generateCharacterFromDescription() {
+    const description = characterPrompt.trim();
+    if (!description || characterBusy) {
+      if (!description) setCharacterError(t("writing.characterRequired"));
+      return;
+    }
+    setCharacterBusy(true);
+    setCharacterError("");
+    const taskId = startBgTask("character", t("writing.taskCharacterGenerate"));
+    try {
+      const created = await api.writerGenerateCharacter({
+        description,
+        mode: characterAdvancedMode ? "advanced" : "basic",
+        advanced: characterAdvancedMode ? characterAdvanced : undefined
+      });
+      setCharacters((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
+      setCharacterEditorId(created.id);
+      log(`${t("writing.logCharacterGenerated")}: ${created.name}`);
+      finishBgTask(taskId, "done", created.name);
+      setCharacterPrompt("");
+
+      if (activeProject && !(activeProject.characterIds || []).includes(created.id)) {
+        const updated = await api.writerProjectSetCharacters(activeProject.id, [...(activeProject.characterIds || []), created.id]);
+        setActiveProject(updated);
+        setProjects((prev) => prev.map((project) => (project.id === updated.id ? updated : project)));
+        log(`${t("writing.logCharacterAddedToCast")}: ${created.name}`);
+      }
+    } catch (err) {
+      const errorText = String(err);
+      setCharacterError(errorText);
+      log(`${t("writing.logError")}: ${errorText}`);
+      finishBgTask(taskId, "error", errorText);
+    } finally {
+      setCharacterBusy(false);
+    }
+  }
+
+  function parseCharacterTags(raw: string): string[] {
+    return raw
+      .split(/[,;\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function toggleCharacterAiField(field: WriterCharacterEditField) {
+    setCharacterAiFields((prev) => (
+      prev.includes(field)
+        ? prev.filter((item) => item !== field)
+        : [...prev, field]
+    ));
+  }
+
+  function characterFieldLabel(field: WriterCharacterEditField): string {
+    switch (field) {
+      case "name": return t("chars.name");
+      case "description": return t("chars.description");
+      case "personality": return t("chars.personality");
+      case "scenario": return t("chars.scenario");
+      case "greeting": return t("chars.firstMessage");
+      case "systemPrompt": return t("chars.systemPrompt");
+      case "mesExample": return t("chars.exampleMessages");
+      case "creatorNotes": return t("chars.creatorNotes");
+      case "tags": return t("chars.tags");
+      default: return field;
+    }
+  }
+
+  const selectedCharacterToEdit = useMemo(
+    () => characters.find((character) => character.id === characterEditorId) ?? null,
+    [characters, characterEditorId]
+  );
+
+  useEffect(() => {
+    if (characters.length === 0) {
+      setCharacterEditorId(null);
+      setCharacterEditDraft({ ...EMPTY_CHARACTER_EDIT_DRAFT });
+      return;
+    }
+    if (!characterEditorId || !characters.some((character) => character.id === characterEditorId)) {
+      setCharacterEditorId(characters[0].id);
+    }
+  }, [characters, characterEditorId]);
+
+  useEffect(() => {
+    if (!selectedCharacterToEdit) {
+      setCharacterEditDraft({ ...EMPTY_CHARACTER_EDIT_DRAFT });
+      setCharacterEditStatus(null);
+      return;
+    }
+    setCharacterEditDraft({
+      name: selectedCharacterToEdit.name || "",
+      description: selectedCharacterToEdit.description || "",
+      personality: selectedCharacterToEdit.personality || "",
+      scenario: selectedCharacterToEdit.scenario || "",
+      greeting: selectedCharacterToEdit.greeting || "",
+      systemPrompt: selectedCharacterToEdit.systemPrompt || "",
+      mesExample: selectedCharacterToEdit.mesExample || "",
+      creatorNotes: selectedCharacterToEdit.creatorNotes || "",
+      tagsText: (selectedCharacterToEdit.tags || []).join(", ")
+    });
+    setCharacterEditStatus(null);
+    setCharacterAiInstruction("");
+    setCharacterAiFields([]);
+  }, [selectedCharacterToEdit?.id, selectedCharacterToEdit]);
+
+  async function saveCharacterEditor() {
+    if (!selectedCharacterToEdit || characterEditBusy || characterAiBusy) return;
+    setCharacterEditBusy(true);
+    setCharacterEditStatus(null);
+    try {
+      const updated = await api.characterUpdate(selectedCharacterToEdit.id, {
+        name: characterEditDraft.name,
+        description: characterEditDraft.description,
+        personality: characterEditDraft.personality,
+        scenario: characterEditDraft.scenario,
+        greeting: characterEditDraft.greeting,
+        systemPrompt: characterEditDraft.systemPrompt,
+        mesExample: characterEditDraft.mesExample,
+        creatorNotes: characterEditDraft.creatorNotes,
+        tags: parseCharacterTags(characterEditDraft.tagsText)
+      });
+      setCharacters((prev) => prev.map((character) => (character.id === updated.id ? updated : character)));
+      setCharacterEditStatus({ tone: "success", text: t("chars.saved") });
+      log(`${t("chars.saved")}: ${updated.name}`);
+    } catch (err) {
+      const text = String(err);
+      setCharacterEditStatus({ tone: "error", text });
+      log(`${t("writing.logError")}: ${text}`);
+    } finally {
+      setCharacterEditBusy(false);
+    }
+  }
+
+  async function applyCharacterAiEdit() {
+    if (!selectedCharacterToEdit || characterEditBusy || characterAiBusy) return;
+    const instruction = characterAiInstruction.trim();
+    if (!instruction) {
+      setCharacterEditStatus({ tone: "error", text: t("writing.characterAiInstructionRequired") });
+      return;
+    }
+    setCharacterAiBusy(true);
+    setCharacterEditStatus(null);
+    try {
+      const result = await api.writerEditCharacter(selectedCharacterToEdit.id, {
+        instruction,
+        fields: characterAiFields.length > 0 ? characterAiFields : undefined
+      });
+      const updated = result.character;
+      setCharacters((prev) => prev.map((character) => (character.id === updated.id ? updated : character)));
+      if (result.changedFields.length === 0) {
+        setCharacterEditStatus({ tone: "success", text: t("writing.characterAiNoChanges") });
+        log(`${t("writing.characterAiNoChanges")}: ${updated.name}`);
+      } else {
+        const labels = result.changedFields.map((field) => characterFieldLabel(field)).join(", ");
+        const status = `${t("writing.characterAiChanged")}: ${labels}`;
+        setCharacterEditStatus({ tone: "success", text: status });
+        log(`${status} (${updated.name})`);
+      }
+    } catch (err) {
+      const text = String(err);
+      setCharacterEditStatus({ tone: "error", text });
+      log(`${t("writing.logError")}: ${text}`);
+    } finally {
+      setCharacterAiBusy(false);
     }
   }
 
@@ -381,7 +621,34 @@ export function WritingScreen() {
   const runningTasks = bgTasks.filter((t) => t.status === "running");
 
   return (
-    <ThreePanelLayout
+    <div className="flex h-full flex-col gap-1.5">
+      <div className="flex justify-center">
+        <div className="inline-flex items-center rounded-md border border-border-subtle bg-bg-primary p-[2px]">
+          <button
+            onClick={() => setWorkspaceMode("books")}
+            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold leading-4 transition-colors ${
+              workspaceMode === "books"
+                ? "bg-accent text-text-inverse"
+                : "text-text-secondary hover:bg-bg-hover"
+            }`}
+          >
+            {t("writing.modeBooks")}
+          </button>
+          <button
+            onClick={() => setWorkspaceMode("characters")}
+            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold leading-4 transition-colors ${
+              workspaceMode === "characters"
+                ? "bg-accent text-text-inverse"
+                : "text-text-secondary hover:bg-bg-hover"
+            }`}
+          >
+            {t("writing.modeCharacters")}
+          </button>
+        </div>
+      </div>
+
+      {workspaceMode === "books" ? (
+        <ThreePanelLayout
       left={
         <>
           <PanelTitle
@@ -871,5 +1138,208 @@ export function WritingScreen() {
         </div>
       }
     />
+      ) : (
+        <section className="mx-auto flex h-full w-full max-w-[1500px] flex-col rounded-xl border border-border bg-bg-secondary p-4">
+          <div className="flex w-full flex-1 flex-col gap-3 overflow-y-auto">
+            <div className="float-card rounded-lg border border-border-subtle bg-bg-primary p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-xs font-semibold text-text-primary">{t("writing.characterForge")}</div>
+                <button
+                  onClick={() => setCharacterAdvancedMode((prev) => !prev)}
+                  className="rounded-md border border-border px-2 py-0.5 text-[10px] text-text-secondary hover:bg-bg-hover"
+                >
+                  {characterAdvancedMode ? t("writing.characterBasic") : t("writing.characterAdvanced")}
+                </button>
+              </div>
+              <textarea
+                value={characterPrompt}
+                onChange={(e) => {
+                  setCharacterPrompt(e.target.value);
+                  if (characterError) setCharacterError("");
+                }}
+                placeholder={t("writing.characterPromptPlaceholder")}
+                className="h-20 w-full rounded-md border border-border bg-bg-secondary px-2 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary"
+              />
+              {characterAdvancedMode && (
+                <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  <input value={characterAdvanced.name || ""} onChange={(e) => updateCharacterAdvanced("name", e.target.value)}
+                    placeholder={t("writing.characterNameHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                  <input value={characterAdvanced.role || ""} onChange={(e) => updateCharacterAdvanced("role", e.target.value)}
+                    placeholder={t("writing.characterRoleHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                  <input value={characterAdvanced.personality || ""} onChange={(e) => updateCharacterAdvanced("personality", e.target.value)}
+                    placeholder={t("writing.characterPersonalityHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                  <input value={characterAdvanced.scenario || ""} onChange={(e) => updateCharacterAdvanced("scenario", e.target.value)}
+                    placeholder={t("writing.characterScenarioHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                  <input value={characterAdvanced.greetingStyle || ""} onChange={(e) => updateCharacterAdvanced("greetingStyle", e.target.value)}
+                    placeholder={t("writing.characterGreetingHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                  <input value={characterAdvanced.systemPrompt || ""} onChange={(e) => updateCharacterAdvanced("systemPrompt", e.target.value)}
+                    placeholder={t("writing.characterSystemHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                  <input value={characterAdvanced.tags || ""} onChange={(e) => updateCharacterAdvanced("tags", e.target.value)}
+                    placeholder={t("writing.characterTagsHint")}
+                    className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary sm:col-span-2" />
+                  <textarea value={characterAdvanced.notes || ""} onChange={(e) => updateCharacterAdvanced("notes", e.target.value)}
+                    placeholder={t("writing.characterNotesHint")}
+                    className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary sm:col-span-2" />
+                </div>
+              )}
+              <div className="mt-2 flex items-center gap-1.5">
+                <button onClick={generateCharacterFromDescription} disabled={characterBusy}
+                  className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-text-inverse hover:bg-accent-hover disabled:opacity-40">
+                  {characterBusy ? t("writing.characterGenerating") : t("writing.characterGenerate")}
+                </button>
+                <button onClick={() => setCharacterAdvanced({ ...DEFAULT_WRITER_CHARACTER_ADVANCED })}
+                  className="rounded-md border border-border px-3 py-1 text-xs text-text-secondary hover:bg-bg-hover">
+                  {t("writing.characterReset")}
+                </button>
+              </div>
+              {characterError && (
+                <div className="mt-2 rounded-md border border-danger-border bg-danger-subtle px-2 py-1 text-[10px] text-danger">
+                  {characterError}
+                </div>
+              )}
+            </div>
+
+            <div className="grid flex-1 min-h-0 grid-cols-1 gap-3 md:grid-cols-[340px_minmax(0,1fr)]">
+              <div className="float-card min-h-0 rounded-lg border border-border-subtle bg-bg-primary p-2">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{t("chars.characters")}</div>
+                {characters.length === 0 ? (
+                  <EmptyState title={t("chars.noChars")} description={t("chars.noCharsDesc")} />
+                ) : (
+                  <div className="max-h-full space-y-1 overflow-y-auto">
+                    {characters.map((character) => (
+                      <button
+                        key={character.id}
+                        onClick={() => setCharacterEditorId(character.id)}
+                        className={`w-full rounded-md border px-2 py-1.5 text-left text-xs ${
+                          characterEditorId === character.id
+                            ? "border-accent-border bg-accent-subtle text-text-primary"
+                            : "border-border-subtle text-text-secondary hover:bg-bg-hover"
+                        }`}
+                      >
+                        <div className="truncate font-medium">{character.name}</div>
+                        <div className="truncate text-[10px] text-text-tertiary">{(character.tags || []).join(", ")}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="float-card min-h-0 rounded-lg border border-border-subtle bg-bg-primary p-3">
+                {selectedCharacterToEdit ? (
+                  <div className="flex h-full flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-text-primary">{selectedCharacterToEdit.name}</div>
+                      <button onClick={saveCharacterEditor} disabled={characterEditBusy || characterAiBusy}
+                        className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-semibold text-text-inverse hover:bg-accent-hover disabled:opacity-40">
+                        {characterEditBusy ? t("writing.working") : t("chat.save")}
+                      </button>
+                    </div>
+                    <div className="rounded-md border border-border-subtle bg-bg-secondary p-2">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{t("writing.characterAiEdit")}</div>
+                        <div className="text-[10px] text-text-tertiary">
+                          {characterAiFields.length > 0
+                            ? `${t("writing.characterAiScope")}: ${characterAiFields.length}`
+                            : t("writing.characterAiScopeAuto")}
+                        </div>
+                      </div>
+                      <textarea
+                        value={characterAiInstruction}
+                        onChange={(e) => setCharacterAiInstruction(e.target.value)}
+                        placeholder={t("writing.characterAiInstructionPlaceholder")}
+                        className="h-16 w-full rounded-md border border-border bg-bg-primary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary"
+                      />
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {CHARACTER_AI_EDIT_FIELDS.map((field) => {
+                          const active = characterAiFields.includes(field);
+                          return (
+                            <button
+                              key={field}
+                              type="button"
+                              onClick={() => toggleCharacterAiField(field)}
+                              className={`rounded-md border px-2 py-0.5 text-[10px] transition-colors ${
+                                active
+                                  ? "border-accent-border bg-accent-subtle text-text-primary"
+                                  : "border-border-subtle text-text-tertiary hover:bg-bg-hover"
+                              }`}
+                            >
+                              {characterFieldLabel(field)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <button
+                          onClick={applyCharacterAiEdit}
+                          disabled={characterAiBusy || characterEditBusy}
+                          className="rounded-md border border-border px-2.5 py-1 text-[11px] font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-40"
+                        >
+                          {characterAiBusy ? t("writing.characterAiEditing") : t("writing.characterAiApply")}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCharacterAiInstruction("");
+                            setCharacterAiFields([]);
+                          }}
+                          className="rounded-md border border-border-subtle px-2 py-1 text-[10px] text-text-tertiary hover:bg-bg-hover"
+                        >
+                          {t("writing.characterAiClear")}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid flex-1 min-h-0 grid-cols-1 gap-2 overflow-y-auto pr-1">
+                      <input value={characterEditDraft.name} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, name: e.target.value }))}
+                        placeholder={t("chars.name")}
+                        className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.description} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, description: e.target.value }))}
+                        placeholder={t("chars.description")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.personality} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, personality: e.target.value }))}
+                        placeholder={t("chars.personality")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.scenario} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, scenario: e.target.value }))}
+                        placeholder={t("chars.scenario")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.greeting} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, greeting: e.target.value }))}
+                        placeholder={t("chars.firstMessage")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.systemPrompt} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, systemPrompt: e.target.value }))}
+                        placeholder={t("chars.systemPrompt")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.mesExample} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, mesExample: e.target.value }))}
+                        placeholder={t("chars.exampleMessages")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <textarea value={characterEditDraft.creatorNotes} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, creatorNotes: e.target.value }))}
+                        placeholder={t("chars.creatorNotes")}
+                        className="h-16 rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                      <input value={characterEditDraft.tagsText} onChange={(e) => setCharacterEditDraft((prev) => ({ ...prev, tagsText: e.target.value }))}
+                        placeholder={t("chars.tagsPlaceholder")}
+                        className="rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary" />
+                    </div>
+                    {characterEditStatus && (
+                      <div className={`rounded-md border px-2 py-1 text-[10px] ${
+                        characterEditStatus.tone === "success"
+                          ? "border-success-border bg-success-subtle text-success"
+                          : "border-danger-border bg-danger-subtle text-danger"
+                      }`}>
+                        {characterEditStatus.text}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <EmptyState title={t("chars.selectCharacter")} description={t("chars.selectCharacterDesc")} />
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
   );
 }

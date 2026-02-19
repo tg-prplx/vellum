@@ -138,10 +138,10 @@ export function WelcomeScreen({ initialSettings, onComplete, onPreviewLocale }: 
                 }}
                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
               >
-                <option value="en">English</option>
-                <option value="ru">Русский</option>
-                <option value="zh">简体中文</option>
-                <option value="ja">日本語</option>
+                <option value="en">{t("common.english")}</option>
+                <option value="ru">{t("common.russian")}</option>
+                <option value="zh">{t("common.chinese")}</option>
+                <option value="ja">{t("common.japanese")}</option>
               </select>
             </div>
 

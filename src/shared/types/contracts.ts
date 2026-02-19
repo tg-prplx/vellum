@@ -89,6 +89,7 @@ export interface RpSceneState {
   mood: string;
   pacing: "slow" | "balanced" | "fast";
   intensity: number;
+  pureChatMode?: boolean;
 }
 
 export interface RpPreset {
@@ -122,6 +123,44 @@ export interface WriterChapterSettings {
   tension: number;
   detail: number;
   dialogue: number;
+}
+
+export interface WriterCharacterAdvancedOptions {
+  name?: string;
+  role?: string;
+  personality?: string;
+  scenario?: string;
+  greetingStyle?: string;
+  systemPrompt?: string;
+  tags?: string;
+  notes?: string;
+}
+
+export interface WriterCharacterGenerateRequest {
+  description: string;
+  mode?: "basic" | "advanced";
+  advanced?: WriterCharacterAdvancedOptions;
+}
+
+export type WriterCharacterEditField =
+  | "name"
+  | "description"
+  | "personality"
+  | "scenario"
+  | "greeting"
+  | "systemPrompt"
+  | "mesExample"
+  | "creatorNotes"
+  | "tags";
+
+export interface WriterCharacterEditRequest {
+  instruction: string;
+  fields?: WriterCharacterEditField[];
+}
+
+export interface WriterCharacterEditResponse {
+  character: CharacterDetail;
+  changedFields: WriterCharacterEditField[];
 }
 
 export interface Chapter {
@@ -245,6 +284,7 @@ export interface AppSettings {
   censorshipMode: CensorshipMode;
   fullLocalMode: boolean;
   responseLanguage: string;
+  translateLanguage: string;
   interfaceLanguage: "en" | "ru" | "zh" | "ja";
   activeProviderId?: string | null;
   activeModel?: string | null;

@@ -1,9 +1,9 @@
-# Vellum
+# Vellium
 
 <p align="center">
-  <img src="docs/vellum-icon.png" alt="Vellum icon" width="120" />
+  <img src="docs/vellium-icon.png" alt="Vellium icon" width="120" />
 </p>
-<p align="center"><strong>Vellum</strong></p>
+<p align="center"><strong>Vellium</strong></p>
 
 Desktop AI/RP chat app built with Electron, a local Express API, and SQLite.
 
