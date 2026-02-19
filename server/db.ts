@@ -291,7 +291,7 @@ const DEFAULT_SETTINGS = {
     samplerOrder: [6, 0, 1, 3, 4, 2, 5] as number[],
     koboldMemory: "",
     koboldBannedPhrases: [] as string[],
-    koboldUseDefaultBadwords: true
+    koboldUseDefaultBadwords: false
   },
   defaultSystemPrompt: "You are an immersive RP assistant. Keep continuity and character consistency. Stay in character at all times.",
   contextWindowSize: 8192,

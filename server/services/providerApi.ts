@@ -73,7 +73,7 @@ export function buildKoboldGenerateBody(params: {
   const stop = parseStopSequences(sc.stop);
   const bannedStrings = parsePhraseBans(sc.koboldBannedPhrases);
   const samplerOrder = parseSamplerOrder(sc.samplerOrder);
-  const useDefaultBadwords = sc.koboldUseDefaultBadwords !== false;
+  const useDefaultBadwords = sc.koboldUseDefaultBadwords === true;
   const nSigma = parseNumber(sc.nSigma, 0, 0, 1);
 
   return {

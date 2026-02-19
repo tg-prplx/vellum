@@ -194,7 +194,7 @@ export function ChatScreen() {
     samplerOrder: [6, 0, 1, 3, 4, 2, 5],
     koboldMemory: "",
     koboldBannedPhrases: [],
-    koboldUseDefaultBadwords: true
+    koboldUseDefaultBadwords: false
   });
 
   // File attachments
@@ -226,6 +226,7 @@ export function ChatScreen() {
   const [activePersona, setActivePersona] = useState<UserPersona | null>(null);
   const [showPersonaModal, setShowPersonaModal] = useState(false);
   const [editingPersona, setEditingPersona] = useState<UserPersona | null>(null);
+  const [koboldBansInput, setKoboldBansInput] = useState("");
 
   // Per-chat sampler — auto-save debounce
   const [samplerSaved, setSamplerSaved] = useState(false);
@@ -290,6 +291,15 @@ export function ChatScreen() {
     const provider = providers.find((item) => item.id === chatProviderId);
     return provider?.providerType || "openai";
   }, [providers, chatProviderId]);
+
+  useEffect(() => {
+    const raw = samplerConfig.koboldBannedPhrases;
+    if (Array.isArray(raw)) {
+      setKoboldBansInput(raw.join(", "));
+      return;
+    }
+    setKoboldBansInput(typeof raw === "string" ? raw : "");
+  }, [samplerConfig.koboldBannedPhrases]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -784,6 +794,13 @@ export function ChatScreen() {
     } catch (error) {
       setErrorText(String(error));
     }
+  }
+
+  function parsePhraseBansInput(raw: string): string[] {
+    return raw
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
   }
 
   // Multi-character: add/remove characters from chat
@@ -1904,13 +1921,11 @@ export function ChatScreen() {
                         </div>
                         <input
                           type="text"
-                          value={(samplerConfig.koboldBannedPhrases || []).join(", ")}
-                          onChange={(e) => setSamplerConfig((p) => ({
+                          value={koboldBansInput}
+                          onChange={(e) => setKoboldBansInput(e.target.value)}
+                          onBlur={() => setSamplerConfig((p) => ({
                             ...p,
-                            koboldBannedPhrases: e.target.value
-                              .split(",")
-                              .map((item) => item.trim())
-                              .filter(Boolean)
+                            koboldBannedPhrases: parsePhraseBansInput(koboldBansInput)
                           }))}
                           className="w-full rounded border border-border bg-bg-primary px-2 py-1 text-[10px] text-text-primary"
                           placeholder="phrase one, phrase two"
@@ -1920,7 +1935,7 @@ export function ChatScreen() {
                         <label className="text-[10px] text-text-tertiary">Use default badwords</label>
                         <input
                           type="checkbox"
-                          checked={samplerConfig.koboldUseDefaultBadwords !== false}
+                          checked={samplerConfig.koboldUseDefaultBadwords === true}
                           onChange={(e) => setSamplerConfig((p) => ({ ...p, koboldUseDefaultBadwords: e.target.checked }))}
                         />
                       </div>

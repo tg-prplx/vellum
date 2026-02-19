@@ -12,9 +12,21 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="mb-1.5 block text-xs font-medium text-text-secondary">{children}</label>;
 }
 
-function InputField({ value, onChange, placeholder, type = "text" }: { value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
+function InputField({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  onBlur
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  onBlur?: () => void;
+}) {
   return (
-    <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+    <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} onBlur={onBlur}
       className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary" />
   );
 }
@@ -74,6 +86,7 @@ export function SettingsScreen() {
   const [mcpImportLoading, setMcpImportLoading] = useState(false);
   const [mcpDiscoveredTools, setMcpDiscoveredTools] = useState<McpDiscoveredTool[]>([]);
   const [mcpDiscoveryLoading, setMcpDiscoveryLoading] = useState(false);
+  const [koboldBansInput, setKoboldBansInput] = useState("");
 
   useEffect(() => {
     void (async () => {
@@ -362,6 +375,22 @@ export function SettingsScreen() {
     setMcpDirty(false);
     setMcpTestResults({});
   }, [settings?.mcpServers, settings?.mcpDiscoveredTools]);
+
+  useEffect(() => {
+    const raw = settings?.samplerConfig.koboldBannedPhrases;
+    if (Array.isArray(raw)) {
+      setKoboldBansInput(raw.join(", "));
+      return;
+    }
+    setKoboldBansInput(typeof raw === "string" ? raw : "");
+  }, [settings?.samplerConfig.koboldBannedPhrases]);
+
+  function parsePhraseBansInput(raw: string): string[] {
+    return raw
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
 
   const toolStates = useMemo(() => {
     const raw = settings?.mcpToolStates;
@@ -762,13 +791,9 @@ export function SettingsScreen() {
                 <div className="mt-3">
                   <FieldLabel>Default phrase bans</FieldLabel>
                   <InputField
-                    value={(settings.samplerConfig.koboldBannedPhrases || []).join(", ")}
-                    onChange={(v) => patchSampler({
-                      koboldBannedPhrases: v
-                        .split(",")
-                        .map((item) => item.trim())
-                        .filter(Boolean)
-                    })}
+                    value={koboldBansInput}
+                    onChange={setKoboldBansInput}
+                    onBlur={() => patchSampler({ koboldBannedPhrases: parsePhraseBansInput(koboldBansInput) })}
                     placeholder="phrase one, phrase two"
                   />
                 </div>
@@ -776,7 +801,7 @@ export function SettingsScreen() {
                   <span className="text-xs font-medium text-text-secondary">Use default badwords IDs</span>
                   <input
                     type="checkbox"
-                    checked={settings.samplerConfig.koboldUseDefaultBadwords !== false}
+                    checked={settings.samplerConfig.koboldUseDefaultBadwords === true}
                     onChange={(e) => patchSampler({ koboldUseDefaultBadwords: e.target.checked })}
                   />
                 </div>
