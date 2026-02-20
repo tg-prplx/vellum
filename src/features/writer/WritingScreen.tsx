@@ -12,7 +12,8 @@ import type {
   Scene,
   WriterChapterSettings,
   WriterCharacterAdvancedOptions,
-  WriterCharacterEditField
+  WriterCharacterEditField,
+  WriterProjectNotes
 } from "../../shared/types/contracts";
 
 const SEVERITY_STYLES: Record<string, { badge: "warning" | "danger" | "default"; border: string }> = {
@@ -40,6 +41,15 @@ const DEFAULT_WRITER_CHARACTER_ADVANCED: WriterCharacterAdvancedOptions = {
   systemPrompt: "",
   tags: "",
   notes: ""
+};
+
+const DEFAULT_PROJECT_NOTES: WriterProjectNotes = {
+  premise: "",
+  styleGuide: "",
+  characterNotes: "",
+  worldRules: "",
+  contextMode: "balanced",
+  summary: ""
 };
 
 type WritingWorkspaceMode = "books" | "characters";
@@ -119,6 +129,7 @@ export function WritingScreen() {
   const { t } = useI18n();
   const [projects, setProjects] = useState<BookProject[]>([]);
   const [activeProject, setActiveProject] = useState<BookProject | null>(null);
+  const [projectNotes, setProjectNotes] = useState<WriterProjectNotes>({ ...DEFAULT_PROJECT_NOTES });
   const [characters, setCharacters] = useState<CharacterDetail[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [scenes, setScenes] = useState<Scene[]>([]);
@@ -156,6 +167,8 @@ export function WritingScreen() {
   const [characterAiFields, setCharacterAiFields] = useState<WriterCharacterEditField[]>([]);
   const [characterAiBusy, setCharacterAiBusy] = useState(false);
   const chapterSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const projectNotesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const docxImportInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     api.writerProjectList().then(setProjects);
@@ -217,6 +230,7 @@ export function WritingScreen() {
     const project = await api.writerProjectCreate(name, t("writing.defaultProjectDescription"), []);
     setProjects((prev) => [project, ...prev]);
     setActiveProject(project);
+    setProjectNotes(project.notes || { ...DEFAULT_PROJECT_NOTES });
     setNewProjectName("");
     setRenameDraft(project.name || "");
     setChapters([]);
@@ -254,6 +268,7 @@ export function WritingScreen() {
         await openProject(remaining[0]);
       } else {
         setActiveProject(null);
+        setProjectNotes({ ...DEFAULT_PROJECT_NOTES });
         setRenameDraft("");
         setChapters([]);
         setScenes([]);
@@ -287,6 +302,7 @@ export function WritingScreen() {
   async function openProject(project: BookProject) {
     const loaded = await api.writerProjectOpen(project.id);
     setActiveProject(loaded.project);
+    setProjectNotes(loaded.project.notes || { ...DEFAULT_PROJECT_NOTES });
     setChapters(loaded.chapters);
     setScenes(loaded.scenes);
     setSelectedChapterId(loaded.chapters[0]?.id ?? null);
@@ -403,6 +419,70 @@ export function WritingScreen() {
     if (!activeProject) return;
     const path = await api.writerExportDocx(activeProject.id);
     log(`${t("writing.logDocxExported")}: ${path}`);
+  }
+
+  function updateProjectNotes(patch: Partial<WriterProjectNotes>) {
+    if (!activeProject) return;
+    const next: WriterProjectNotes = { ...projectNotes, ...patch };
+    setProjectNotes(next);
+    setActiveProject((prev) => (prev ? { ...prev, notes: next } : prev));
+    setProjects((prev) => prev.map((project) => (
+      project.id === activeProject.id ? { ...project, notes: next } : project
+    )));
+    if (projectNotesTimerRef.current) clearTimeout(projectNotesTimerRef.current);
+    projectNotesTimerRef.current = setTimeout(() => {
+      void api.writerProjectUpdateNotes(activeProject.id, next).catch((err) => {
+        log(`${t("writing.logError")}: ${String(err)}`);
+      });
+    }, 350);
+  }
+
+  async function summarizeBook(force = false) {
+    if (!activeProject || busy) return;
+    setBusy(true);
+    const taskId = startBgTask("summarize", t("writing.summarizeBook"));
+    try {
+      const result = await api.writerProjectSummarize(activeProject.id, force);
+      updateProjectNotes({ summary: result.summary });
+      log(`${t("writing.logSummary")}: ${result.cached ? t("writing.summaryCached") : t("writing.summaryRefreshed")}`);
+      finishBgTask(taskId, "done", `${result.chapterCount} ${t("writing.chShort")}`);
+    } catch (err) {
+      log(`${t("writing.logError")}: ${String(err)}`);
+      finishBgTask(taskId, "error", String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openDocxPicker() {
+    docxImportInputRef.current?.click();
+  }
+
+  async function handleDocxImport(file: File | null) {
+    if (!file || !activeProject) return;
+    if (busy) return;
+    setBusy(true);
+    const taskId = startBgTask("generate", `${t("writing.importDocx")}: ${file.name}`);
+    try {
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Failed to read DOCX file"));
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.readAsDataURL(file);
+      });
+      const payload = await api.writerProjectImportDocx(activeProject.id, base64Data, file.name);
+      await openProject(activeProject);
+      log(`${t("writing.logDocxImported")}: ${payload.chaptersCreated} ${t("writing.chShort")}, ${payload.scenesCreated} ${t("writing.scenesShort")}`);
+      finishBgTask(taskId, "done", `${payload.chaptersCreated}/${payload.scenesCreated}`);
+    } catch (err) {
+      log(`${t("writing.logError")}: ${String(err)}`);
+      finishBgTask(taskId, "error", String(err));
+    } finally {
+      setBusy(false);
+      if (docxImportInputRef.current) {
+        docxImportInputRef.current.value = "";
+      }
+    }
   }
 
   async function toggleProjectCharacter(characterId: string) {
@@ -606,8 +686,13 @@ export function WritingScreen() {
   }, [activeProject?.id, activeProject?.name]);
 
   useEffect(() => {
+    setProjectNotes(activeProject?.notes || { ...DEFAULT_PROJECT_NOTES });
+  }, [activeProject?.id]);
+
+  useEffect(() => {
     return () => {
       if (chapterSettingsTimerRef.current) clearTimeout(chapterSettingsTimerRef.current);
+      if (projectNotesTimerRef.current) clearTimeout(projectNotesTimerRef.current);
     };
   }, []);
 
@@ -711,6 +796,23 @@ export function WritingScreen() {
                   </svg>
                   {t("chat.new")}
                 </button>
+                <button
+                  onClick={openDocxPicker}
+                  disabled={!activeProject}
+                  className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-text-secondary hover:bg-bg-hover disabled:opacity-40"
+                >
+                  {t("writing.importDocx")}
+                </button>
+                <input
+                  ref={docxImportInputRef}
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    void handleDocxImport(file);
+                  }}
+                />
               </div>
             }
           >
@@ -915,6 +1017,10 @@ export function WritingScreen() {
             <button onClick={runConsistency} disabled={!activeProject}
               className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-40">
               {t("writing.consistency")}
+            </button>
+            <button onClick={() => void summarizeBook(false)} disabled={!activeProject || busy}
+              className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-40">
+              {t("writing.summarizeBook")}
             </button>
             <button onClick={expandScene} disabled={!selectedSceneId || busy}
               className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-40">
@@ -1133,6 +1239,63 @@ export function WritingScreen() {
             <button onClick={exportDocx} className="flex-1 rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-text-secondary hover:bg-bg-hover">
               {t("writing.exportDOCX")}
             </button>
+          </div>
+
+          <div className="mb-3 rounded-lg border border-border-subtle bg-bg-primary p-2.5">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{t("writing.bookBible")}</div>
+              <button
+                onClick={() => void summarizeBook(true)}
+                disabled={!activeProject || busy}
+                className="rounded-md border border-border px-2 py-0.5 text-[10px] text-text-secondary hover:bg-bg-hover disabled:opacity-40"
+              >
+                {t("writing.refreshSummary")}
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-[10px] text-text-tertiary">
+                {t("writing.contextMode")}
+                <select
+                  value={projectNotes.contextMode}
+                  onChange={(e) => updateProjectNotes({ contextMode: e.target.value as WriterProjectNotes["contextMode"] })}
+                  className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary"
+                >
+                  <option value="economy">{t("writing.contextModeEconomy")}</option>
+                  <option value="balanced">{t("writing.contextModeBalanced")}</option>
+                  <option value="rich">{t("writing.contextModeRich")}</option>
+                </select>
+              </label>
+              <textarea
+                value={projectNotes.premise}
+                onChange={(e) => updateProjectNotes({ premise: e.target.value })}
+                placeholder={t("writing.bookPremise")}
+                className="h-14 w-full rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary"
+              />
+              <textarea
+                value={projectNotes.styleGuide}
+                onChange={(e) => updateProjectNotes({ styleGuide: e.target.value })}
+                placeholder={t("writing.styleGuide")}
+                className="h-14 w-full rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary"
+              />
+              <textarea
+                value={projectNotes.worldRules}
+                onChange={(e) => updateProjectNotes({ worldRules: e.target.value })}
+                placeholder={t("writing.worldRules")}
+                className="h-14 w-full rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary"
+              />
+              <textarea
+                value={projectNotes.characterNotes}
+                onChange={(e) => updateProjectNotes({ characterNotes: e.target.value })}
+                placeholder={t("writing.characterLedger")}
+                className="h-14 w-full rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary"
+              />
+              <textarea
+                value={projectNotes.summary}
+                onChange={(e) => updateProjectNotes({ summary: e.target.value })}
+                placeholder={t("writing.bookSummary")}
+                className="h-20 w-full rounded-md border border-border bg-bg-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary"
+              />
+            </div>
           </div>
 
           {/* Background tasks history */}

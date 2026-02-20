@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { createHash } from "crypto";
 import { writeFileSync } from "fs";
 import { join } from "path";
+import mammoth from "mammoth";
 import { db, newId, now, DATA_DIR, DEFAULT_SETTINGS } from "../db.js";
 import { runConsistency } from "../domain/writerEngine.js";
 import { buildKoboldGenerateBody, extractKoboldGeneratedText, normalizeProviderType, requestKoboldGenerate } from "../services/providerApi.js";
@@ -53,6 +55,15 @@ interface WriterChapterSettings {
 interface WriterSampler {
   temperature: number;
   maxTokens: number;
+}
+
+interface WriterProjectNotes {
+  premise: string;
+  styleGuide: string;
+  characterNotes: string;
+  worldRules: string;
+  contextMode: "economy" | "balanced" | "rich";
+  summary: string;
 }
 
 interface WriterCharacterAdvancedInput {
@@ -123,6 +134,15 @@ const DEFAULT_CHAPTER_SETTINGS: WriterChapterSettings = {
   tension: 0.55,
   detail: 0.65,
   dialogue: 0.5
+};
+
+const DEFAULT_PROJECT_NOTES: WriterProjectNotes = {
+  premise: "",
+  styleGuide: "",
+  characterNotes: "",
+  worldRules: "",
+  contextMode: "balanced",
+  summary: ""
 };
 
 function clamp01(value: number): number {
@@ -379,6 +399,198 @@ function parseJsonIdArray(raw: string | null | undefined): string[] {
 function normalizeProjectName(input: unknown, fallback = "Untitled Book"): string {
   const value = String(input ?? "").trim();
   return value || fallback;
+}
+
+function normalizeProjectNotes(input: unknown): WriterProjectNotes {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { ...DEFAULT_PROJECT_NOTES };
+  }
+  const row = input as Partial<WriterProjectNotes>;
+  const contextMode = row.contextMode === "economy" || row.contextMode === "rich"
+    ? row.contextMode
+    : "balanced";
+  return {
+    premise: toCleanText(row.premise, 6000),
+    styleGuide: toCleanText(row.styleGuide, 6000),
+    characterNotes: toCleanText(row.characterNotes, 12000),
+    worldRules: toCleanText(row.worldRules, 8000),
+    contextMode,
+    summary: toCleanText(row.summary, 20000)
+  };
+}
+
+function parseProjectNotes(raw: string | null | undefined): WriterProjectNotes {
+  if (!raw) return { ...DEFAULT_PROJECT_NOTES };
+  try {
+    return normalizeProjectNotes(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_PROJECT_NOTES };
+  }
+}
+
+function decodeBase64Payload(value: string): Buffer {
+  const raw = String(value || "").trim();
+  const payload = raw.startsWith("data:")
+    ? raw.slice(raw.indexOf(",") + 1)
+    : raw;
+  return Buffer.from(payload, "base64");
+}
+
+function normalizeDocxText(raw: string): string {
+  return String(raw || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\u0000/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function splitLongText(text: string, maxChars: number): string[] {
+  const normalized = normalizeDocxText(text);
+  if (!normalized) return [];
+  const parts = normalized.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const out: string[] = [];
+  let current = "";
+  for (const part of parts) {
+    if (!current) {
+      current = part;
+      continue;
+    }
+    if ((current.length + part.length + 2) <= maxChars) {
+      current = `${current}\n\n${part}`;
+      continue;
+    }
+    out.push(current);
+    current = part;
+  }
+  if (current) out.push(current);
+  return out.length > 0 ? out : [normalized];
+}
+
+function splitDocxIntoChapters(text: string): Array<{ title: string; content: string }> {
+  const lines = normalizeDocxText(text).split("\n");
+  const chapterMarkers = /^((chapter|ch\.)\s*\d+|prologue|epilogue)\b[:\-\s]*/i;
+  const items: Array<{ title: string; content: string }> = [];
+  let currentTitle = "Imported Chapter";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    const content = normalizeDocxText(buffer.join("\n"));
+    if (!content) return;
+    items.push({ title: currentTitle, content });
+    buffer = [];
+  };
+
+  for (const lineRaw of lines) {
+    const line = lineRaw.trim();
+    if (!line) {
+      buffer.push("");
+      continue;
+    }
+    if (chapterMarkers.test(line) && line.length <= 90) {
+      flush();
+      currentTitle = line.replace(/\s+/g, " ").trim().slice(0, 120);
+      continue;
+    }
+    buffer.push(lineRaw);
+  }
+  flush();
+
+  if (items.length > 0) return items;
+  return [{ title: "Imported Chapter", content: normalizeDocxText(text) }];
+}
+
+function hashContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function truncateForPrompt(text: string, maxChars: number): string {
+  const value = String(text || "").trim();
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function buildProjectNotesDirective(notes: WriterProjectNotes): string {
+  const parts = [
+    notes.premise ? `[Book Premise]\n${notes.premise}` : "",
+    notes.styleGuide ? `[Style Guide]\n${notes.styleGuide}` : "",
+    notes.worldRules ? `[World Rules]\n${notes.worldRules}` : "",
+    notes.characterNotes ? `[Character Notes]\n${notes.characterNotes}` : "",
+    notes.summary ? `[Book Summary]\n${notes.summary}` : ""
+  ].filter(Boolean);
+  if (parts.length === 0) return "";
+  return ["[Book Bible]", ...parts].join("\n\n");
+}
+
+function buildProjectContextPack(projectId: string, chapterId: string, notes: WriterProjectNotes): string {
+  const mode = notes.contextMode;
+  const limits = mode === "economy"
+    ? { prev: 1400, current: 1000, total: 2600 }
+    : mode === "rich"
+      ? { prev: 5200, current: 3200, total: 9000 }
+      : { prev: 2800, current: 1800, total: 5200 };
+
+  const chapters = db.prepare(
+    "SELECT id, title, position FROM writer_chapters WHERE project_id = ? ORDER BY position ASC"
+  ).all(projectId) as Array<{ id: string; title: string; position: number }>;
+  const currentIndex = chapters.findIndex((row) => row.id === chapterId);
+  const previous = currentIndex > 0 ? chapters.slice(0, currentIndex) : [];
+
+  let previousContext = "";
+  for (let i = previous.length - 1; i >= 0; i -= 1) {
+    const chapter = previous[i];
+    const summaryRow = db.prepare(
+      "SELECT summary FROM writer_chapter_summaries WHERE chapter_id = ?"
+    ).get(chapter.id) as { summary: string } | undefined;
+    const fallbackRow = db.prepare(
+      "SELECT content FROM writer_scenes WHERE chapter_id = ? ORDER BY created_at DESC LIMIT 1"
+    ).get(chapter.id) as { content: string } | undefined;
+    const snippet = truncateForPrompt(summaryRow?.summary || fallbackRow?.content || "", 500);
+    if (!snippet) continue;
+    const block = `${chapter.title}: ${snippet}`;
+    if (previousContext.length + block.length + 2 > limits.prev) break;
+    previousContext = previousContext ? `${block}\n${previousContext}` : block;
+  }
+
+  const currentScenes = db.prepare(
+    "SELECT title, content FROM writer_scenes WHERE chapter_id = ? ORDER BY created_at DESC LIMIT 3"
+  ).all(chapterId) as Array<{ title: string; content: string }>;
+  const currentContext = currentScenes
+    .map((row) => `${row.title}: ${truncateForPrompt(row.content, 500)}`)
+    .join("\n");
+
+  const out = [
+    previousContext ? `[Previous Chapters]\n${truncateForPrompt(previousContext, limits.prev)}` : "",
+    currentContext ? `[Current Chapter Progress]\n${truncateForPrompt(currentContext, limits.current)}` : ""
+  ].filter(Boolean).join("\n\n");
+  return truncateForPrompt(out, limits.total);
+}
+
+async function summarizeWithCache(cacheKey: { kind: "chapter"; id: string } | { kind: "project"; id: string }, hash: string, systemPrompt: string, userPrompt: string): Promise<{ summary: string; cached: boolean }> {
+  const selectSql = cacheKey.kind === "chapter"
+    ? "SELECT summary, content_hash FROM writer_chapter_summaries WHERE chapter_id = ?"
+    : "SELECT summary, content_hash FROM writer_project_summaries WHERE project_id = ?";
+  const existing = db.prepare(selectSql).get(cacheKey.id) as { summary: string; content_hash: string } | undefined;
+  if (existing && existing.content_hash === hash && existing.summary.trim()) {
+    return { summary: existing.summary, cached: true };
+  }
+
+  const generated = (await callLlm(systemPrompt, userPrompt, { temperature: 0.35, maxTokens: 1200 })).trim();
+  const summary = generated || "(empty summary)";
+  if (cacheKey.kind === "chapter") {
+    db.prepare(
+      `INSERT INTO writer_chapter_summaries (chapter_id, content_hash, summary, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(chapter_id) DO UPDATE SET content_hash = excluded.content_hash, summary = excluded.summary, updated_at = excluded.updated_at`
+    ).run(cacheKey.id, hash, summary, now());
+  } else {
+    db.prepare(
+      `INSERT INTO writer_project_summaries (project_id, content_hash, summary, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(project_id) DO UPDATE SET content_hash = excluded.content_hash, summary = excluded.summary, updated_at = excluded.updated_at`
+    ).run(cacheKey.id, hash, summary, now());
+  }
+  return { summary, cached: false };
 }
 
 function normalizeChapterSettings(input: unknown): WriterChapterSettings {
@@ -742,20 +954,22 @@ router.post("/projects", (req, res) => {
   const normalizedName = normalizeProjectName(name, `Book ${new Date().toLocaleDateString()}`);
   const normalizedDescription = String(description || "").trim() || "New writing project";
   const normalizedCharacterIds = parseIdArray(characterIds);
-  db.prepare("INSERT INTO writer_projects (id, name, description, character_ids, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(id, normalizedName, normalizedDescription, JSON.stringify(normalizedCharacterIds), ts);
-  res.json({ id, name: normalizedName, description: normalizedDescription, characterIds: normalizedCharacterIds, createdAt: ts });
+  const notes = { ...DEFAULT_PROJECT_NOTES };
+  db.prepare("INSERT INTO writer_projects (id, name, description, character_ids, notes_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(id, normalizedName, normalizedDescription, JSON.stringify(normalizedCharacterIds), JSON.stringify(notes), ts);
+  res.json({ id, name: normalizedName, description: normalizedDescription, characterIds: normalizedCharacterIds, notes, createdAt: ts });
 });
 
 router.get("/projects", (_req, res) => {
   const rows = db.prepare("SELECT * FROM writer_projects ORDER BY created_at DESC").all() as {
-    id: string; name: string; description: string; character_ids: string | null; created_at: string;
+    id: string; name: string; description: string; character_ids: string | null; notes_json: string | null; created_at: string;
   }[];
   res.json(rows.map((r) => ({
     id: r.id,
     name: r.name,
     description: r.description,
     characterIds: parseJsonIdArray(r.character_ids),
+    notes: parseProjectNotes(r.notes_json),
     createdAt: r.created_at
   })));
 });
@@ -763,7 +977,7 @@ router.get("/projects", (_req, res) => {
 router.get("/projects/:id", (req, res) => {
   const projectId = req.params.id;
   const project = db.prepare("SELECT * FROM writer_projects WHERE id = ?").get(projectId) as {
-    id: string; name: string; description: string; character_ids: string | null; created_at: string;
+    id: string; name: string; description: string; character_ids: string | null; notes_json: string | null; created_at: string;
   } | undefined;
 
   if (!project) { res.status(404).json({ error: "Project not found" }); return; }
@@ -790,6 +1004,7 @@ router.get("/projects/:id", (req, res) => {
       name: project.name,
       description: project.description,
       characterIds: parseJsonIdArray(project.character_ids),
+      notes: parseProjectNotes(project.notes_json),
       createdAt: project.created_at
     },
     chapters: chapters.map((c) => ({
@@ -810,8 +1025,8 @@ router.get("/projects/:id", (req, res) => {
 router.patch("/projects/:id/characters", (req, res) => {
   const projectId = req.params.id;
   const characterIds = parseIdArray((req.body as { characterIds?: unknown })?.characterIds);
-  const row = db.prepare("SELECT id, name, description, created_at FROM writer_projects WHERE id = ?")
-    .get(projectId) as { id: string; name: string; description: string; created_at: string } | undefined;
+  const row = db.prepare("SELECT id, name, description, notes_json, created_at FROM writer_projects WHERE id = ?")
+    .get(projectId) as { id: string; name: string; description: string; notes_json: string | null; created_at: string } | undefined;
   if (!row) {
     res.status(404).json({ error: "Project not found" });
     return;
@@ -825,18 +1040,20 @@ router.patch("/projects/:id/characters", (req, res) => {
     name: row.name,
     description: row.description,
     characterIds,
+    notes: parseProjectNotes(row.notes_json),
     createdAt: row.created_at
   });
 });
 
 router.patch("/projects/:id", (req, res) => {
   const projectId = req.params.id;
-  const row = db.prepare("SELECT id, name, description, character_ids, created_at FROM writer_projects WHERE id = ?")
+  const row = db.prepare("SELECT id, name, description, character_ids, notes_json, created_at FROM writer_projects WHERE id = ?")
     .get(projectId) as {
       id: string;
       name: string;
       description: string;
       character_ids: string | null;
+      notes_json: string | null;
       created_at: string;
     } | undefined;
   if (!row) {
@@ -858,7 +1075,44 @@ router.patch("/projects/:id", (req, res) => {
     name: nextName,
     description: nextDescription,
     characterIds: parseJsonIdArray(row.character_ids),
+    notes: parseProjectNotes(row.notes_json),
     createdAt: row.created_at
+  });
+});
+
+router.patch("/projects/:id/notes", (req, res) => {
+  const projectId = req.params.id;
+  const row = db.prepare("SELECT id, name, description, character_ids, notes_json, created_at FROM writer_projects WHERE id = ?")
+    .get(projectId) as {
+      id: string;
+      name: string;
+      description: string;
+      character_ids: string | null;
+      notes_json: string | null;
+      created_at: string;
+    } | undefined;
+  if (!row) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+
+  const currentNotes = parseProjectNotes(row.notes_json);
+  const patchInput = (req.body as { notes?: unknown })?.notes;
+  const patch = patchInput && typeof patchInput === "object" && !Array.isArray(patchInput)
+    ? patchInput as Record<string, unknown>
+    : {};
+  const merged = normalizeProjectNotes({ ...currentNotes, ...patch });
+  db.prepare("UPDATE writer_projects SET notes_json = ? WHERE id = ?").run(JSON.stringify(merged), projectId);
+
+  res.json({
+    project: {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      characterIds: parseJsonIdArray(row.character_ids),
+      notes: merged,
+      createdAt: row.created_at
+    }
   });
 });
 
@@ -874,7 +1128,10 @@ router.delete("/projects/:id", (req, res) => {
   const deleteTx = db.transaction((id: string) => {
     db.prepare("DELETE FROM writer_scenes WHERE chapter_id IN (SELECT id FROM writer_chapters WHERE project_id = ?)")
       .run(id);
+    db.prepare("DELETE FROM writer_chapter_summaries WHERE chapter_id IN (SELECT id FROM writer_chapters WHERE project_id = ?)")
+      .run(id);
     db.prepare("DELETE FROM writer_chapters WHERE project_id = ?").run(id);
+    db.prepare("DELETE FROM writer_project_summaries WHERE project_id = ?").run(id);
     db.prepare("DELETE FROM writer_beats WHERE project_id = ?").run(id);
     db.prepare("DELETE FROM writer_consistency_reports WHERE project_id = ?").run(id);
     db.prepare("DELETE FROM writer_exports WHERE project_id = ?").run(id);
@@ -883,6 +1140,179 @@ router.delete("/projects/:id", (req, res) => {
 
   deleteTx(projectId);
   res.json({ ok: true, id: projectId });
+});
+
+router.post("/projects/:id/import/docx", async (req, res) => {
+  const projectId = req.params.id;
+  const row = db.prepare("SELECT id FROM writer_projects WHERE id = ?").get(projectId) as { id: string } | undefined;
+  if (!row) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+
+  const base64Data = String((req.body as { base64Data?: unknown })?.base64Data || "");
+  if (!base64Data.trim()) {
+    res.status(400).json({ error: "base64Data is required" });
+    return;
+  }
+
+  try {
+    const buffer = decodeBase64Payload(base64Data);
+    const extracted = await mammoth.extractRawText({ buffer });
+    const text = normalizeDocxText(extracted.value || "");
+    if (!text) {
+      res.status(400).json({ error: "DOCX appears empty or unsupported" });
+      return;
+    }
+
+    const chapterChunks = splitDocxIntoChapters(text).slice(0, 64);
+    const chapterCountRow = db.prepare(
+      "SELECT COALESCE(MAX(position), 0) AS max_pos FROM writer_chapters WHERE project_id = ?"
+    ).get(projectId) as { max_pos: number | null };
+    let nextPosition = (chapterCountRow.max_pos ?? 0) + 1;
+    let chaptersCreated = 0;
+    let scenesCreated = 0;
+    const chapterTitles: string[] = [];
+
+    const tx = db.transaction(() => {
+      for (const chunk of chapterChunks) {
+        const chapterId = newId();
+        const chapterTitle = normalizeProjectName(chunk.title, `Imported Chapter ${nextPosition}`).slice(0, 160);
+        const parts = splitLongText(chunk.content, 6500).slice(0, 24);
+        const chapterSettings = { ...DEFAULT_CHAPTER_SETTINGS };
+        db.prepare(
+          "INSERT INTO writer_chapters (id, project_id, title, position, settings_json, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(chapterId, projectId, chapterTitle, nextPosition, JSON.stringify(chapterSettings), now());
+        nextPosition += 1;
+        chaptersCreated += 1;
+        chapterTitles.push(chapterTitle);
+
+        parts.forEach((contentPart, index) => {
+          const sceneId = newId();
+          const sceneTitle = parts.length > 1 ? `${chapterTitle} (Part ${index + 1})` : chapterTitle;
+          db.prepare(
+            "INSERT INTO writer_scenes (id, chapter_id, title, content, goals, conflicts, outcomes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+          ).run(
+            sceneId,
+            chapterId,
+            sceneTitle.slice(0, 180),
+            contentPart,
+            "Imported from DOCX",
+            "",
+            "",
+            now()
+          );
+          scenesCreated += 1;
+        });
+      }
+    });
+    tx();
+
+    res.json({
+      ok: true,
+      chaptersCreated,
+      scenesCreated,
+      chapterTitles
+    });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to import DOCX"
+    });
+  }
+});
+
+router.post("/projects/:id/summarize", async (req, res) => {
+  const projectId = req.params.id;
+  const force = Boolean((req.body as { force?: unknown } | undefined)?.force);
+  const project = db.prepare("SELECT id, name, notes_json FROM writer_projects WHERE id = ?").get(projectId) as {
+    id: string;
+    name: string;
+    notes_json: string | null;
+  } | undefined;
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+
+  const chapters = db.prepare(
+    "SELECT id, title FROM writer_chapters WHERE project_id = ? ORDER BY position ASC"
+  ).all(projectId) as Array<{ id: string; title: string }>;
+  if (chapters.length === 0) {
+    res.json({ summary: "", cached: true, chapterCount: 0 });
+    return;
+  }
+
+  const settings = getSettings();
+  const notes = parseProjectNotes(project.notes_json);
+  const chapterSummaries: string[] = [];
+  let anyCacheMiss = false;
+
+  for (const chapter of chapters) {
+    const scenes = db.prepare(
+      "SELECT title, content FROM writer_scenes WHERE chapter_id = ? ORDER BY created_at ASC"
+    ).all(chapter.id) as Array<{ title: string; content: string }>;
+    const sourceText = scenes.map((scene) => `${scene.title}\n${scene.content}`).join("\n\n");
+    const hash = hashContent(sourceText);
+
+    let summaryResult: { summary: string; cached: boolean };
+    if (!force) {
+      summaryResult = await summarizeWithCache(
+        { kind: "chapter", id: chapter.id },
+        hash,
+        [
+          settings.promptTemplates.writerSummarize,
+          buildProjectNotesDirective(notes)
+        ].filter(Boolean).join("\n\n"),
+        `Summarize chapter "${chapter.title}" from the following material:\n\n${truncateForPrompt(sourceText, 22000)}`
+      );
+    } else {
+      const generated = await callLlm(
+        [
+          settings.promptTemplates.writerSummarize,
+          buildProjectNotesDirective(notes)
+        ].filter(Boolean).join("\n\n"),
+        `Summarize chapter "${chapter.title}" from the following material:\n\n${truncateForPrompt(sourceText, 22000)}`,
+        { temperature: 0.35, maxTokens: 1200 }
+      );
+      summaryResult = { summary: generated.trim() || "(empty summary)", cached: false };
+      db.prepare(
+        `INSERT INTO writer_chapter_summaries (chapter_id, content_hash, summary, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(chapter_id) DO UPDATE SET content_hash = excluded.content_hash, summary = excluded.summary, updated_at = excluded.updated_at`
+      ).run(chapter.id, hash, summaryResult.summary, now());
+    }
+
+    if (!summaryResult.cached) anyCacheMiss = true;
+    chapterSummaries.push(`${chapter.title}\n${summaryResult.summary}`);
+  }
+
+  const projectSource = chapterSummaries.join("\n\n");
+  const projectHash = hashContent(projectSource);
+  const projectPrompt = [
+    "You are a novel development assistant.",
+    "Create a concise but rich book-level summary with plot progression, character arcs, and unresolved threads.",
+    "Output in clear prose, no markdown bullet spam."
+  ].join("\n");
+  const projectResult = force
+    ? { summary: (await callLlm(projectPrompt, projectSource, { temperature: 0.3, maxTokens: 1400 })).trim() || "(empty summary)", cached: false }
+    : await summarizeWithCache({ kind: "project", id: projectId }, projectHash, projectPrompt, projectSource);
+  if (force) {
+    db.prepare(
+      `INSERT INTO writer_project_summaries (project_id, content_hash, summary, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(project_id) DO UPDATE SET content_hash = excluded.content_hash, summary = excluded.summary, updated_at = excluded.updated_at`
+    ).run(projectId, projectHash, projectResult.summary, now());
+  }
+
+  const mergedNotes = normalizeProjectNotes({ ...notes, summary: projectResult.summary });
+  db.prepare("UPDATE writer_projects SET notes_json = ? WHERE id = ?")
+    .run(JSON.stringify(mergedNotes), projectId);
+
+  res.json({
+    summary: projectResult.summary,
+    cached: !force && projectResult.cached && !anyCacheMiss,
+    chapterCount: chapters.length
+  });
 });
 
 // --- Chapters ---
@@ -959,21 +1389,29 @@ router.post("/chapters/:id/generate-draft", async (req, res) => {
     res.status(404).json({ error: "Chapter not found" });
     return;
   }
-  const project = db.prepare("SELECT character_ids FROM writer_projects WHERE id = ?")
-    .get(chapter.project_id) as { character_ids: string | null } | undefined;
+  const project = db.prepare("SELECT character_ids, notes_json FROM writer_projects WHERE id = ?")
+    .get(chapter.project_id) as { character_ids: string | null; notes_json: string | null } | undefined;
 
   const chapterSettings = parseChapterSettings(chapter.settings_json);
   const id = newId();
   const ts = now();
 
   const settings = getSettings();
+  const projectNotes = parseProjectNotes(project?.notes_json);
+  const projectContext = buildProjectContextPack(chapter.project_id, chapterId, projectNotes);
   const systemPrompt = [
     settings.promptTemplates.writerGenerate,
     buildChapterDirective(chapterSettings),
-    buildCharacterContext(parseJsonIdArray(project?.character_ids))
+    buildCharacterContext(parseJsonIdArray(project?.character_ids)),
+    buildProjectNotesDirective(projectNotes)
   ].filter(Boolean).join("\n\n");
   const sampler = createWriterSampler(settings.samplerConfig, chapterSettings);
-  const content = await callLlm(systemPrompt, prompt, sampler);
+  const userPrompt = [
+    "[Writing Task]",
+    String(prompt || ""),
+    projectContext ? `[Context Pack]\n${projectContext}` : ""
+  ].filter(Boolean).join("\n\n");
+  const content = await callLlm(systemPrompt, userPrompt, sampler);
   const titleMatch = content.match(/^#\s*(.+)/m);
   const title = titleMatch ? titleMatch[1].slice(0, 60) : "Generated Scene";
 
@@ -1000,16 +1438,23 @@ router.post("/scenes/:id/expand", async (req, res) => {
   const chapter = db.prepare("SELECT project_id, settings_json FROM writer_chapters WHERE id = ?")
     .get(row.chapter_id) as { project_id: string; settings_json: string | null } | undefined;
   const project = chapter
-    ? db.prepare("SELECT character_ids FROM writer_projects WHERE id = ?").get(chapter.project_id) as { character_ids: string | null } | undefined
+    ? db.prepare("SELECT character_ids, notes_json FROM writer_projects WHERE id = ?").get(chapter.project_id) as { character_ids: string | null; notes_json: string | null } | undefined
     : undefined;
   const chapterSettings = parseChapterSettings(chapter?.settings_json);
+  const projectNotes = parseProjectNotes(project?.notes_json);
+  const projectContext = chapter ? buildProjectContextPack(chapter.project_id, row.chapter_id, projectNotes) : "";
   const systemPrompt = [
     settings.promptTemplates.writerExpand,
     buildChapterDirective(chapterSettings),
-    buildCharacterContext(parseJsonIdArray(project?.character_ids))
+    buildCharacterContext(parseJsonIdArray(project?.character_ids)),
+    buildProjectNotesDirective(projectNotes)
   ].filter(Boolean).join("\n\n");
   const sampler = createWriterSampler(settings.samplerConfig, chapterSettings);
-  const expanded = await callLlm(systemPrompt, row.content, sampler);
+  const expanded = await callLlm(
+    systemPrompt,
+    [projectContext ? `[Context Pack]\n${projectContext}` : "", row.content].filter(Boolean).join("\n\n"),
+    sampler
+  );
 
   db.prepare("UPDATE writer_scenes SET content = ? WHERE id = ?").run(expanded, sceneId);
 
@@ -1033,9 +1478,11 @@ router.post("/scenes/:id/rewrite", async (req, res) => {
   const chapter = db.prepare("SELECT project_id, settings_json FROM writer_chapters WHERE id = ?")
     .get(row.chapter_id) as { project_id: string; settings_json: string | null } | undefined;
   const project = chapter
-    ? db.prepare("SELECT character_ids FROM writer_projects WHERE id = ?").get(chapter.project_id) as { character_ids: string | null } | undefined
+    ? db.prepare("SELECT character_ids, notes_json FROM writer_projects WHERE id = ?").get(chapter.project_id) as { character_ids: string | null; notes_json: string | null } | undefined
     : undefined;
   const chapterSettings = parseChapterSettings(chapter?.settings_json);
+  const projectNotes = parseProjectNotes(project?.notes_json);
+  const projectContext = chapter ? buildProjectContextPack(chapter.project_id, row.chapter_id, projectNotes) : "";
   const mergedToneSettings = normalizeChapterSettings({
     ...chapterSettings,
     tone: toneRaw.trim() || chapterSettings.tone
@@ -1043,10 +1490,15 @@ router.post("/scenes/:id/rewrite", async (req, res) => {
   const systemPrompt = [
     (settings.promptTemplates.writerRewrite || "").replace("{{tone}}", mergedToneSettings.tone),
     buildChapterDirective(mergedToneSettings),
-    buildCharacterContext(parseJsonIdArray(project?.character_ids))
+    buildCharacterContext(parseJsonIdArray(project?.character_ids)),
+    buildProjectNotesDirective(projectNotes)
   ].filter(Boolean).join("\n\n");
   const sampler = createWriterSampler(settings.samplerConfig, mergedToneSettings);
-  const rewritten = await callLlm(systemPrompt, row.content, sampler);
+  const rewritten = await callLlm(
+    systemPrompt,
+    [projectContext ? `[Context Pack]\n${projectContext}` : "", row.content].filter(Boolean).join("\n\n"),
+    sampler
+  );
 
   db.prepare("UPDATE writer_scenes SET content = ? WHERE id = ?").run(rewritten, sceneId);
 
@@ -1066,15 +1518,22 @@ router.get("/scenes/:id/summarize", async (req, res) => {
   const chapter = db.prepare("SELECT project_id, settings_json FROM writer_chapters WHERE id = ?")
     .get(row.chapter_id) as { project_id: string; settings_json: string | null } | undefined;
   const project = chapter
-    ? db.prepare("SELECT character_ids FROM writer_projects WHERE id = ?").get(chapter.project_id) as { character_ids: string | null } | undefined
+    ? db.prepare("SELECT character_ids, notes_json FROM writer_projects WHERE id = ?").get(chapter.project_id) as { character_ids: string | null; notes_json: string | null } | undefined
     : undefined;
   const chapterSettings = parseChapterSettings(chapter?.settings_json);
+  const projectNotes = parseProjectNotes(project?.notes_json);
+  const projectContext = chapter ? buildProjectContextPack(chapter.project_id, row.chapter_id, projectNotes) : "";
   const systemPrompt = [
     settings.promptTemplates.writerSummarize,
     buildChapterDirective(chapterSettings),
-    buildCharacterContext(parseJsonIdArray(project?.character_ids))
+    buildCharacterContext(parseJsonIdArray(project?.character_ids)),
+    buildProjectNotesDirective(projectNotes)
   ].filter(Boolean).join("\n\n");
-  const summary = await callLlm(systemPrompt, row.content, createWriterSampler(settings.samplerConfig, chapterSettings));
+  const summary = await callLlm(
+    systemPrompt,
+    [projectContext ? `[Context Pack]\n${projectContext}` : "", row.content].filter(Boolean).join("\n\n"),
+    createWriterSampler(settings.samplerConfig, chapterSettings)
+  );
 
   res.json(summary);
 });

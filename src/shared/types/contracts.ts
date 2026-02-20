@@ -148,7 +148,30 @@ export interface BookProject {
   name: string;
   description: string;
   characterIds: Id[];
+  notes?: WriterProjectNotes;
   createdAt: string;
+}
+
+export interface WriterProjectNotes {
+  premise: string;
+  styleGuide: string;
+  characterNotes: string;
+  worldRules: string;
+  contextMode: "economy" | "balanced" | "rich";
+  summary: string;
+}
+
+export interface WriterDocxImportResult {
+  ok: boolean;
+  chaptersCreated: number;
+  scenesCreated: number;
+  chapterTitles: string[];
+}
+
+export interface WriterProjectSummaryResult {
+  summary: string;
+  cached: boolean;
+  chapterCount: number;
 }
 
 export interface WriterChapterSettings {

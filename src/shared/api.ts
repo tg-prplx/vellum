@@ -24,6 +24,9 @@ import type {
   WriterCharacterEditRequest,
   WriterCharacterEditResponse,
   WriterCharacterGenerateRequest,
+  WriterDocxImportResult,
+  WriterProjectNotes,
+  WriterProjectSummaryResult,
   UserPersona
 } from "./types/contracts";
 
@@ -368,6 +371,12 @@ export const api = {
     patchReq<BookProject>(`/writer/projects/${projectId}/characters`, { characterIds }),
   writerProjectOpen: (projectId: string) =>
     get<{ project: BookProject; chapters: Chapter[]; scenes: Scene[] }>(`/writer/projects/${projectId}`),
+  writerProjectUpdateNotes: (projectId: string, notes: Partial<WriterProjectNotes>) =>
+    patchReq<{ project: BookProject }>(`/writer/projects/${projectId}/notes`, { notes }),
+  writerProjectImportDocx: (projectId: string, base64Data: string, filename: string) =>
+    post<WriterDocxImportResult>(`/writer/projects/${projectId}/import/docx`, { base64Data, filename }),
+  writerProjectSummarize: (projectId: string, force = false) =>
+    post<WriterProjectSummaryResult>(`/writer/projects/${projectId}/summarize`, { force }),
   writerChapterCreate: (projectId: string, title: string) =>
     post<Chapter>("/writer/chapters", { projectId, title }),
   writerChapterUpdateSettings: (chapterId: string, settings: WriterChapterSettings) =>

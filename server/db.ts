@@ -122,6 +122,7 @@ db.exec(`
     name TEXT NOT NULL,
     description TEXT NOT NULL,
     character_ids TEXT NOT NULL DEFAULT '[]',
+    notes_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
   );
 
@@ -169,6 +170,20 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS writer_chapter_summaries (
+    chapter_id TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS writer_project_summaries (
+    project_id TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS prompt_blocks (
     id TEXT PRIMARY KEY,
     chat_id TEXT NOT NULL,
@@ -214,6 +229,7 @@ const migrations = [
   "ALTER TABLE chats ADD COLUMN lorebook_id TEXT",
   "ALTER TABLE characters ADD COLUMN lorebook_id TEXT",
   "ALTER TABLE writer_projects ADD COLUMN character_ids TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE writer_projects ADD COLUMN notes_json TEXT NOT NULL DEFAULT '{}'",
   "ALTER TABLE writer_chapters ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'",
   "ALTER TABLE providers ADD COLUMN provider_type TEXT NOT NULL DEFAULT 'openai'"
 ];
