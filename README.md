@@ -7,6 +7,8 @@
 
 Desktop AI/RP chat app built with Electron, a local Express API, and SQLite.
 
+<img width="1709" height="1028" alt="image" src="https://github.com/user-attachments/assets/35bb7ba6-7e01-4e56-9055-7fe823b92541" />
+
 ## Important
 - Use `npm run dev` for daily development.
 - Use `npm run dist:mac` / `npm run dist:win` for desktop bundles.
@@ -27,6 +29,7 @@ Desktop AI/RP chat app built with Electron, a local Express API, and SQLite.
 - Character cards: import, validate, edit.
 - Creative Writing mode: projects, chapters, scenes, consistency check, export.
 - Desktop packaging for macOS and Windows via electron-builder.
+<img width="1710" height="1036" alt="image" src="https://github.com/user-attachments/assets/b3544e9f-ad98-4bf8-82fb-4167f06d37b8" />
 
 ## Requirements
 - Node.js + npm (LTS recommended; project uses native module `better-sqlite3`).
